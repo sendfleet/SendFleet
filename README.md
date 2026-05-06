@@ -2,9 +2,6 @@
   <h1 style="color:#f0ede8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-weight:800; font-size:3em; letter-spacing:-0.03em; margin:0;">
     Send<span style="color:#f5a623;">Fleet</span>
   </h1>
-  <p style="color:#8a8480; font-size:1.1em; max-width:480px; margin:12px auto 0; line-height:1.6;">
-    The email layer that <strong style="color:#f0ede8;">pays for itself</strong>.
-  </p>
   <p style="color:#8a8480; font-size:0.9em; margin-top:8px;">
     One endpoint. No SDK required. No per‑email markup.
   </p>
