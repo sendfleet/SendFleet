@@ -21,7 +21,7 @@ SendFleet operates two distinct infrastructure paths. You choose when you add a 
 | | BYOC | Shared SES |
 |---|---|---|
 | **Sends through** | Your own AWS SES account | SendFleet's managed AWS SES |
-| **Email content stored on our servers** | Never | Yes (90 days, in your dashboard) |
+| **Email content stored on our servers** | Never | Yes (14 days, in your dashboard) |
 | **Sender reputation** | Isolated to your AWS account | Shared pool (Growth/Pro) |
 | **AWS account required** | Yes (yours, out of sandbox) | No |
 | **Manual approval required** | No | Yes (1–2 business days) |
