@@ -76,7 +76,7 @@ registered in **SendFleet's**.
 setup. No SDK, no agent, no build step.
 
 ```bash
-curl -X POST https://sendfleet.net/api/send/ \
+curl -X POST https://api.sendfleet.net/v1/send \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -106,7 +106,7 @@ The same call in other languages — the request body is identical:
 import requests
 
 requests.post(
-    "https://sendfleet.net/api/send/",
+    "https://api.sendfleet.net/v1/send",
     headers={"X-API-Key": "YOUR_API_KEY"},
     json={
         "to": "user@example.com",
@@ -120,7 +120,7 @@ requests.post(
 ```
 
 ```javascript
-await fetch("https://sendfleet.net/api/send/", {
+await fetch("https://api.sendfleet.net/v1/send", {
   method: "POST",
   headers: { "X-API-Key": "YOUR_API_KEY", "Content-Type": "application/json" },
   body: JSON.stringify({
@@ -137,7 +137,7 @@ await fetch("https://sendfleet.net/api/send/", {
 
 ## Send endpoint
 
-**`POST https://sendfleet.net/api/send/`**
+**`POST https://api.sendfleet.net/v1/send`**
 
 Every request sends `Content-Type: application/json` and your key in the `X-API-Key` header.
 Request bodies are JSON; responses are always JSON. This is the only sending endpoint.
@@ -267,14 +267,14 @@ correlation `idempotency_key` is the only field to use.
 
 ## Account endpoint
 
-**`GET https://sendfleet.net/api/me/`**
+**`GET https://api.sendfleet.net/v1/me`**
 
 Returns the authenticated account's identity, verification status, current plan, BYOC
 configuration status, verified sending domains, and current-month usage. Same `X-API-Key` header.
 The response is scoped to the account the key belongs to and never includes secrets.
 
 ```bash
-curl https://sendfleet.net/api/me/ -H "X-API-Key: YOUR_API_KEY"
+curl https://api.sendfleet.net/v1/me -H "X-API-Key: YOUR_API_KEY"
 ```
 
 ```json
@@ -299,9 +299,9 @@ curl https://sendfleet.net/api/me/ -H "X-API-Key: YOUR_API_KEY"
 |---|---|
 | `name`, `email` | Account identity. |
 | `is_verified` | Sending is blocked until this is `true`. |
-| `current_plan` | `starter`, `byoc`, `managed_starter`, `growth`, or `pro`. Empty string means no subscription currently grants access. |
-| `byoc_usage_current_month` | BYOC sends this calendar month (UTC). |
-| `shared_usage_current_month` | Shared sends this calendar month. This is exactly the number checked against your plan limit. |
+| `current_plan` | The plan whose allowance applies **right now**: `starter` (free), `byoc`, `managed_starter`, `growth`, or `pro`. An inactive, cancelled or `past_due` subscription reports `starter`, because that is what you are metered against — read this field, not your billing history, when you want to know your limit. |
+| `byoc_usage_current_month` | BYOC sends this calendar month (UTC). **On Free BYOC this is the plan's one counter** and includes Shared smoke-test sends (see [Free plan: the Shared smoke test](#free-plan-the-shared-smoke-test)); it is the number checked against the 50. |
+| `shared_usage_current_month` | Shared sends this calendar month. On a Managed plan this is exactly the number checked against your plan limit. On Free BYOC it only breaks out how many of your sends were smoke tests. |
 | `shared_delivered_current_month` | Feeds your delivery rate. |
 | `shared_bounced_current_month` | Feeds your bounce rate. |
 | `shared_complained_current_month` | Feeds your complaint rate. |
@@ -310,10 +310,15 @@ curl https://sendfleet.net/api/me/ -H "X-API-Key: YOUR_API_KEY"
 | `verified_byoc_domains` / `verified_shared_domains` | Verified domains per mode. |
 
 A month with no activity returns zero rather than omitting the field. Previous months are not
-included. `GET /api/me/` counts against the same 60 requests/minute limit as sending — call it at
+included. `GET /v1/me` counts against the same 60 requests/minute limit as sending — call it at
 startup or on a schedule, not before every individual email.
 
-`GET /api/health/` is an unauthenticated liveness endpoint.
+`GET https://api.sendfleet.net/health` is an unauthenticated liveness endpoint.
+
+> **Base URL.** The API is served only from `https://api.sendfleet.net`. An integration still
+> calling `https://sendfleet.net/api/send/` or `/api/me/` must switch to `/v1/send` and `/v1/me` on
+> the API host; the headers, request body and responses are identical. The dashboard stays at
+> `sendfleet.net/dashboard`.
 
 <br>
 
@@ -415,6 +420,13 @@ discarded, exactly as they are on Managed plans. See [Attachments](#attachments)
 - **Free BYOC** — 50 emails per month.
 - **BYOC ($9/mo)** — no SendFleet cap. Your own AWS SES sending quota still applies.
 
+The Free BYOC allowance also covers the [Shared smoke test](#free-plan-the-shared-smoke-test): one
+monthly counter, whichever path the send takes.
+
+Deleting your account does not reset it. Sign up again with the same address in the same calendar
+month (UTC) — letter case, a `+tag` and, for Gmail, dots do not make it a different one — and the
+new account continues from the sends the deleted one had used. The next month starts at zero.
+
 There are **no webhooks and no email logs on BYOC plans.** Your messages are processed entirely
 within your AWS account, so we have no access to their delivery events. Read them from your own SES
 event destinations and CloudWatch.
@@ -447,6 +459,32 @@ Email content for Shared SES sends is written to your email log and retained for
 purged automatically. Attachments are staged only for the duration of delivery and are never
 written to our database.
 
+### Free plan: the Shared smoke test
+
+Free BYOC can also send through Shared SES — **to your own verified account address and nowhere
+else**. It exists so you can check a request end to end through SendFleet's infrastructure before
+you set up AWS or pick a plan. **It is a smoke test, not a sending path.**
+
+- **One recipient:** the email address you signed up with, exactly. Any other `to` — a colleague, a
+  `+tag` variant, a SendFleet test address, the SES simulator — is refused with
+  `403 unauthorized` and nothing is queued.
+- **No redirection:** `reply_to` may only be empty, your own address, or the sender address.
+  `from_name` may not contain an address, line breaks, or the characters `< > @ , ; "`, and
+  `subject` may not contain line breaks.
+- **One Shared domain**, verified the same way as on a Managed plan.
+- **Same allowance:** smoke tests count towards Free BYOC's 50 emails a month, together with your
+  BYOC sends.
+- **No webhooks.** Smoke-test sends appear in your email log (14 days, content included — this is
+  Shared SES), but no webhook fires for them, even if your account has endpoints left over from a
+  previous Managed plan.
+- Your BYOC sending on the free plan is unaffected: it still sends to anyone.
+- **Zero tolerance for spam reports.** A smoke test only ever reaches your own inbox, so marking one
+  as spam is reporting your own mail. The first spam complaint on a smoke test **permanently
+  suspends the account** — no warning and no temporary pause first. Delete a smoke test you no
+  longer want; do not report it.
+
+To send to anyone else through Shared SES, choose a Managed plan.
+
 <br>
 
 ## Plans and pricing
@@ -455,7 +493,7 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 
 | Plan | Sends through | Monthly limit | Price |
 |---|---|---|---|
-| **Free BYOC** | Your AWS SES (BYOC) | 50 | **Free** |
+| **Free BYOC** | Your AWS SES (BYOC) — plus a Shared smoke test to your own address | 50 (both together) | **Free** |
 | **BYOC** | Your AWS SES (BYOC) | Unlimited* | **$9/mo** |
 | **Managed Starter** | SendFleet Shared SES | 5,000 | **$5/mo** |
 | **Managed Growth** | SendFleet Shared SES | 25,000 | **$15/mo** |
@@ -469,7 +507,7 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 |---|---|---|---|---|---|
 | **Price** | $0/mo | $9/mo | $5/mo | $15/mo | $59/mo |
 | **Sending infrastructure** | Your AWS SES | Your AWS SES | SendFleet SES | SendFleet SES | SendFleet SES |
-| **Recipients, subjects, bodies stored by us** | Never | Never | Stored in logs | Stored in logs | Stored in logs |
+| **Recipients, subjects, bodies stored by us** | Never for BYOC sends (smoke tests are logged 14 days) | Never | Stored in logs | Stored in logs | Stored in logs |
 | **Reputation isolated per-customer** | ✓ | ✓ | — | — | — |
 | **Manual account approval** | Not required | Not required | Not required | Not required | Not required |
 | **Monthly email volume** | 50 | Unlimited* | 5,000 | 25,000 | 100,000 |
@@ -479,13 +517,15 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 | **Domain verification** | Via your SES | Via your SES | Via our SES | Via our SES | Via our SES |
 | **Attachments** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Bounce & complaint handling** | Your AWS account | Your AWS account | ✓ | ✓ | ✓ |
+| **Shared SES sending** | Smoke test only: your own address | — | ✓ | ✓ | ✓ |
 | **Webhook delivery events** | — | — | ✓ | ✓ | ✓ |
 | **Support channel** | Email | Email | Priority email | Priority email | Priority email |
 
 ### What each plan is for
 
 - **Free BYOC** — Validate your integration end-to-end before committing to anything. 50 emails a
-  month, no credit card, no time limit. Upgrade to $9/month for unlimited sends with no other
+  month, no credit card, no time limit. Includes a Shared smoke test to your own address, so you can
+  try a request before setting up AWS; it cannot send to anyone else. Upgrade to $9/month for unlimited sends with no other
   changes to your code.
 - **BYOC ($9)** — You want your own sender reputation and no message content retained by us, and 50
   emails a month is too low. Removes the SendFleet cap entirely. Requires a validated IAM role
@@ -513,13 +553,18 @@ Both BYOC and Shared SES domains go through the same DNS verification flow. Reco
 
 ```
 TXT    _amazonses.yourdomain.com          <verification_token>
+TXT    _sendfleet.yourdomain.com          sendfleet-verification=<value>
 
 CNAME  <token1>._domainkey.yourdomain.com  <token1>.dkim.amazonses.com
 CNAME  <token2>._domainkey.yourdomain.com  <token2>.dkim.amazonses.com
 CNAME  <token3>._domainkey.yourdomain.com  <token3>.dkim.amazonses.com
 ```
 
-A domain is **send-ready** once both checks pass: SES ownership verification **and** DKIM. If
+The `_sendfleet` value is unique to that domain on your account: it proves the domain is yours, not
+another account's that added the same name. Domains verified before this record existed do not need
+it.
+
+A domain is **send-ready** once both checks pass: ownership verification (both TXT records) **and** DKIM. If
 ownership passes but DKIM does not, sending is blocked and your dashboard says so.
 
 ### Strongly recommended for inbox placement
@@ -659,7 +704,7 @@ human-readable and explicitly non-contractual.
 {
   "success": false,
   "error": "domain_not_verified",
-  "detail": "Domain 'yourdomain.com' is not yet verified. Add the TXT ownership record and click Verify in the dashboard."
+  "detail": "Domain 'yourdomain.com' is not yet verified. Add both TXT ownership records, then press Verify all records at https://sendfleet.net/dashboard/domains/"
 }
 ```
 
@@ -679,14 +724,14 @@ human-readable and explicitly non-contractual.
 | HTTP | `error` | Cause | Fix |
 |---|---|---|---|
 | 400 | — | Malformed body: bad email, missing `message`/`html`/`attachments`, too many attachments, attachment size or type violation | Fix the payload. Do not retry unchanged. |
-| 401 | — | Missing, invalid, revoked, or expired API key | Fix the key. |
-| 403 | `unauthorized` | Account not entitled to this path — email unverified, no active plan granting it, shared sending unavailable, or BYOC not yet configured | Verify the account email, check the plan, or finish BYOC setup. |
+| 403 | — | Missing, invalid, revoked, or expired API key. This body carries no `error` code, so a bare 403 with no `error` field means the key was the problem. | Fix the key. |
+| 403 | `unauthorized` | Account not entitled to this path — email unverified, no active plan granting it, shared sending unavailable, BYOC not yet configured, or a Free plan Shared smoke test addressed to anyone but your own verified address | Verify the account email, check the plan, finish BYOC setup, or send the smoke test to yourself. |
 | 403 | `domain_not_registered` | `from_email` domain is not in your account | Add the domain first. |
 | 403 | `domain_not_allowed` | API key is scoped to a different set of domains | Use the right key or widen its scope. |
 | 403 | `domain_not_verified` | SES ownership or DKIM not yet confirmed | Add the DNS records and verify. |
 | 403 | `dkim_not_verified` | All three DKIM CNAMEs not confirmed (Shared SES) | Publish the records, then verify DKIM. |
 | 403 | `domain_mode_mismatch` | The domain's sending mode does not match your plan | Add a domain for the mode your plan uses, or switch plans. |
-| 403 | `sending_suspended` | Sending paused on your account | Contact support to request reinstatement. |
+| 403 | `sending_suspended` | Sending stopped on your account: a 24-hour pause that lifts by itself, or a suspension | Check the `detail`: a temporary pause resumes on its own; a suspension needs a support review. |
 | 422 | `recipient_suppressed` | *Reserved for contract stability — no longer returned* | Keep any existing handler, but do not expect it to fire. |
 | 429 | `usage_limit_exceeded` | Monthly plan quota exhausted | Do not retry. Upgrade, or wait for the quota to reset on the first of the next UTC calendar month. |
 | 429 | — | Per-key rate limit exceeded (60/min) | Retry with exponential backoff from 1s, and spread bursts out. |
@@ -700,7 +745,7 @@ human-readable and explicitly non-contractual.
 | Status | Retryable? | Strategy |
 |---|---|---|
 | 400 | No | Fix the request payload. |
-| 401 | No | Fix the API key. |
+| 403 (no `error` field) | No | Fix the API key. |
 | 403 | No | Fix the account or domain configuration. |
 | 429 (quota) | No | Upgrade, or wait for the monthly reset. |
 | 429 (rate limit) | **Yes** | Exponential backoff from 1s. |
@@ -742,36 +787,102 @@ the address undeliverable on your side and stop sending to it.
 
 Bounce and complaint rates are measured continuously across **three rolling windows** — a short
 acute window, 24 hours, and 14 days — each with its own limit. No window is judged below a minimum
-send count and a minimum failing-message count, because two bounces against ten sends is noise and
-we will not suspend you for it. New accounts are given lower volume floors while their sending
-history is still short. Complaint reports are weighted most heavily, since a spam report is a
+send count **and** a minimum failing-message count, because two bounces against ten sends is noise
+and we will not act on it. Complaint reports are weighted most heavily, since a spam report is a
 judgement about your mail rather than a transient delivery problem.
+
+New accounts are given lower volume floors while their sending history is still short — but not
+zero, and not one complaint. A brand-new account is not held to the same volume as a long-running
+one, and it is not exempted from the rules either.
 
 **We do not publish the numeric limits.** What keeps you clear of them is straightforward: keep
 hard bounce rates low, keep complaint rates very low, and send enough volume that a handful of
 transient failures cannot trip a window.
 
-**One exception you should design around:** a *single* spam report classifying your mail as
-**fraud, virus, or abuse** is disqualifying on its own, whatever the volume or rate around it.
-There is no threshold to stay under and no window to average it out of. If your templates or
-redirects could be mistaken for phishing, expect this to be the rule that gets you.
+**One exception you should design around:** a spam report classifying your mail as **fraud** or
+**virus** acts on its own, whatever the volume or rate around it. Everything else an inbox provider
+reports — including an ordinary "mark as spam" button click — counts toward your complaint rate and
+is judged by rate like any other signal. If your templates or redirects could be mistaken for
+phishing, that is the rule to design around.
 
-### What suspension does
+**A second exception, on the free plan only:** a spam complaint on a
+[Shared smoke test](#free-plan-the-shared-smoke-test) — mail that can only have gone to your own
+address — **permanently suspends the account on the first report**, skipping the warning and the
+pause below. Free BYOC sending and every paid plan follow the steps below unchanged.
 
-Crossing a limit **can** pause API sending automatically. The account changes:
+### What happens when you cross a limit
 
-- **Sending is paused.** `/api/send/` returns `403 sending_suspended`.
+There are three steps, and the first two are reversible.
+
+**1. A warning.** While your bounce or complaint rate is getting close to a limit, we email your
+account address with what to check, so there is time to fix the cause. Nothing about your account
+changes.
+
+Every step below is emailed to the account address too: the pause (with the time it ends), the
+resume, the suspension and any reinstatement. None of those emails states a rate or a limit.
+
+**2. A temporary pause — 24 hours.** Crossing a limit the first time **pauses** API sending for 24
+hours. It resumes by itself. The account changes only this:
+
+- **Sending is paused.** `/v1/send` returns `403 sending_suspended`, with a `detail` that says the
+  pause is temporary and will lift on its own.
+- **Your subscription is untouched.** Your plan keeps running and nothing is cancelled, nothing is
+  added to any blocklist, and you do not need to do anything to restart sending.
+- **Account changes are frozen while the pause is open** — you cannot add or remove domains, API
+  keys, or webhooks, change your BYOC configuration, or delete the account. Revoking an existing API
+  key still works; that door stays open on purpose. Everything unfreezes when the pause lapses.
+
+**3. Suspension — and only on a repeat breach.** If your account crosses a limit again after it has
+already been paused once, that is a repeat breach and the response becomes permanent:
+
+- **Sending is suspended.** `/v1/send` returns `403 sending_suspended`.
 - **Your subscription is ended.** Billing stops and you are not charged again. If sending is later
   reinstated, you will need to start a new subscription to resume sending.
-- **Account changes are frozen.** You cannot add or remove domains, API keys, or webhooks, change
-  your BYOC configuration, or delete the account.
-- **Revoking an existing API key still works** — that door stays open on purpose.
+- **Account changes stay frozen.**
 - **Reinstating sending does not restore billing.**
 
-**Reinstatement is never automatic and always requires a support review.** Contact
-[support@sendfleet.net](mailto:support@sendfleet.net) to request it.
+Suspension is also what a SendFleet operator will apply directly when there is confirmed abuse,
+rather than waiting for the counters to get there first.
+
+**Reinstatement is a support review, not an automated step.** Contact
+[support@sendfleet.net](mailto:support@sendfleet.net) to request it, and expect to be asked what
+you changed about your list first — a clean list and an honest answer is usually enough to get an
+account back.
 
 BYOC accounts build reputation in their own AWS account and are monitored by AWS rather than by us.
+
+### Testing an integration without mailing anyone
+
+SendFleet owns a set of addresses that behave like the outcomes you need to handle. Send to them and
+you get a real webhook and a real log entry, without emailing a real person and without touching your
+quota or your sending-quality numbers.
+
+| Address | Result |
+|---|---|
+| `delivered@sendfleet.net` | `email.delivered` webhook, log marked `delivered` |
+| `bounce@sendfleet.net` | `email.bounced` webhook, log marked `bounced` |
+| `complaint@sendfleet.net` | `email.complained` webhook, log marked `complained` |
+
+`success@sendfleet.net` and `sent@sendfleet.net` are accepted aliases for `delivered@`, and
+`bounced@` / `complained@` for the other two, in case your fixture data would rather use those
+spellings.
+
+Every send to one of these counts against your monthly allowance like any other send, and is
+excluded from your bounce and complaint rates, so testing your webhook handlers cannot get your
+account suspended. Each response also carries a `warnings` entry saying so.
+
+Anything at `simulator.amazonses.com` is treated the same way: it counts against your allowance and
+never against your rates. Those addresses *are* handed to AWS — the SES simulator accepts and
+swallows them, which is useful if you are testing at the SES level.
+
+> **The three test addresses are available on Shared SES only.** Sending to `bounce@sendfleet.net`
+> from a BYOC domain returns `403 unauthorized` and is not queued. This is deliberate: the test
+> addresses work by SendFleet generating the delivery event itself, and on BYOC your own AWS account
+> performs the send with no event destination connected to SendFleet, so there is nothing to
+> generate. Allowing it would put a real message into your account addressed to a mailbox that does
+> not exist — a real non-delivery report against the sender reputation you own, and no webhook for
+> you to test. Simulator addresses do work on BYOC. To test a BYOC integration, send to
+> a real address you control.
 
 <br>
 
@@ -816,8 +927,9 @@ with a link to the page that fixes it.
 - **Free BYOC is free forever.** No card, no expiry, no time limit.
 - Quotas reset at the start of each **UTC calendar month**. There is no annual billing.
 
-Usage counts are cached for up to 30 seconds, so treat your plan limit as a **soft ceiling** rather
-than an exact cut-off. Hitting a plan's email limit is not a refundable event. Refund requests must
+Usage is counted exactly: every send claims its slot in the monthly count atomically before it is
+queued, so the limit is a hard cut-off even under concurrency, and a send that fails to queue gives
+its slot back. Hitting a plan's email limit is not a refundable event. Refund requests must
 be raised within 14 days of the charge — 30 days for billing errors; see the
 [refund policy](https://sendfleet.net/refund-policy/).
 
@@ -882,6 +994,7 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 | Email log retention (Shared SES) | 14 days |
 | Monthly send limit | 50 / Unlimited / 5,000 / 25,000 / 100,000 by plan |
 | DNS propagation | A few minutes, up to 48 hours |
+| Test-address sends | Count against the monthly send limit like any other send; never against the bounce or complaint rates |
 | Webhook delivery timeout | 5 seconds, no retries |
 | IAM role session (BYOC) | Up to 15 minutes |
 
