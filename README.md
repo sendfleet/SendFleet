@@ -146,7 +146,9 @@ Request bodies are JSON; responses are always JSON. This is the only sending end
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `to` | email | **Yes** | **One recipient per request.** No `cc`, `bcc`, or recipient arrays — send one call per address. |
+| `to` | email or email[] | **Yes** | One address, or a list. `to`, `cc` and `bcc` together hold at most **50** recipients (the Amazon SES per-message limit), and no address may appear twice across them. |
+| `cc` | email or email[] | No | Copy recipients, shown to everyone in the `Cc` header. |
+| `bcc` | email or email[] | No | Blind-copy recipients. They receive the message and appear in no header. |
 | `from_email` | email | Effectively yes | Must belong to a verified, send-ready domain in your account. **This field drives routing.** Omit it and it falls back to your account login email, which is almost never a sending domain, so the call fails with `domain_not_registered`. |
 | `from_name` | string | No | Display name, rendered as `From: Your App <hello@yourdomain.com>`. Max **156** characters. |
 | `subject` | string | No | Max **256** characters. Falls back to `(no subject)`. Spam filters penalise subject-less mail — always set one. |
@@ -157,6 +159,32 @@ Request bodies are JSON; responses are always JSON. This is the only sending end
 
 **At least one of `message`, `html`, or `attachments` must be present.** None is individually
 required, but a request carrying none of the three is rejected with a `400`.
+
+### Several recipients
+
+One request sends **one message** to everyone in `to`, `cc` and `bcc`:
+
+```json
+{
+  "to": ["alice@example.com", "bob@example.com"],
+  "cc": "accounts@example.com",
+  "bcc": ["archive@yourdomain.com"],
+  "from_email": "orders@yourdomain.com",
+  "subject": "Your order #1042",
+  "message": "Thanks for your order!"
+}
+```
+
+- **Every recipient counts as one send**, the way Amazon SES counts them — the request above uses
+  four of your monthly allowance. A send that needs more than your plan has left is refused whole
+  with `429 usage_limit_exceeded`; it never goes to only some of its recipients.
+- **At most 50 recipients** across the three fields, and **no address twice** (compared
+  case-insensitively). Either is a `400`.
+- **On Shared SES every recipient is its own entry** in your email log and gets its own webhooks,
+  all under the send's one `idempotency_key`, with the address in `recipient`.
+- **The Free plan's Shared smoke test allows no `cc` or `bcc`** — it reaches your own address only.
+  Free BYOC sending supports both.
+- **A SendFleet test address must be a send's only recipient.**
 
 ### Successful response — `200 OK`
 
@@ -182,6 +210,7 @@ required, but a request carrying none of the three is rejected with a `400`.
 | `idempotency_key` | **Shared SES only** | The correlation key for this send. The same value appears on every webhook fired for it. Absent on BYOC responses. |
 | `mode` | both | `"byoc"` or `"shared"` — which path delivered the message. |
 | `attachments` | both | Count of attachments accepted. Present only when the request included attachments. |
+| `recipients` | both | Number of recipients across `to`, `cc` and `bcc`, each counted as one send. Present only when there is more than one. |
 | `warnings` | **Shared SES only** | Non-blocking deliverability gaps, such as a missing MAIL FROM or DMARC record. |
 
 **Warnings never block delivery.** The email is still sent. They flag DNS gaps that measurably hurt
@@ -252,6 +281,8 @@ all the way to delivery.
 
 - **On Shared SES**, it is returned in the response as `idempotency_key` and appears on every
   webhook fired for that send. **Store it** — it is how you tie a response to its delivery events.
+  A send to several recipients has one key and fires each event once per recipient, so match on
+  `idempotency_key` and `recipient` together.
 - **On BYOC** there is no webhook and no log, so there is nothing to correlate against. Keep the
   `message_id` for your own records and to quote to support.
 
@@ -467,7 +498,7 @@ you set up AWS or pick a plan. **It is a smoke test, not a sending path.**
 
 - **One recipient:** the email address you signed up with, exactly. Any other `to` — a colleague, a
   `+tag` variant, a SendFleet test address, the SES simulator — is refused with
-  `403 unauthorized` and nothing is queued.
+  `403 unauthorized` and nothing is queued. So are a second `to` address and any `cc` or `bcc`.
 - **No redirection:** `reply_to` may only be empty, your own address, or the sender address.
   `from_name` may not contain an address, line breaks, or the characters `< > @ , ; "`, and
   `subject` may not contain line breaks.
@@ -668,7 +699,7 @@ Every payload is flat and shares four fields:
 |---|---|
 | `idempotency_key` | Matches the key in your send response. **This is how you correlate.** |
 | `ses_message_id` | The provider's message identifier. |
-| `recipient` | The recipient address. |
+| `recipient` | The recipient this event is about. A send to several recipients produces one event per recipient. |
 | `status` | Terminal or in-flight status for this message. |
 
 Event-specific fields follow. `email.sent` adds `subject`, `mode`, and `attachments`; bounces add
@@ -723,7 +754,7 @@ human-readable and explicitly non-contractual.
 
 | HTTP | `error` | Cause | Fix |
 |---|---|---|---|
-| 400 | — | Malformed body: bad email, missing `message`/`html`/`attachments`, too many attachments, attachment size or type violation | Fix the payload. Do not retry unchanged. |
+| 400 | — | Malformed body: bad email, missing `message`/`html`/`attachments`, more than 50 recipients, a repeated recipient, too many attachments, attachment size or type violation | Fix the payload. Do not retry unchanged. |
 | 403 | — | Missing, invalid, revoked, or expired API key. This body carries no `error` code, so a bare 403 with no `error` field means the key was the problem. | Fix the key. |
 | 403 | `unauthorized` | Account not entitled to this path — email unverified, no active plan granting it, shared sending unavailable, BYOC not yet configured, or a Free plan Shared smoke test addressed to anyone but your own verified address | Verify the account email, check the plan, finish BYOC setup, or send the smoke test to yourself. |
 | 403 | `domain_not_registered` | `from_email` domain is not in your account | Add the domain first. |
@@ -733,7 +764,7 @@ human-readable and explicitly non-contractual.
 | 403 | `domain_mode_mismatch` | The domain's sending mode does not match your plan | Add a domain for the mode your plan uses, or switch plans. |
 | 403 | `sending_suspended` | Sending stopped on your account: a 24-hour pause that lifts by itself, or a suspension | Check the `detail`: a temporary pause resumes on its own; a suspension needs a support review. |
 | 422 | `recipient_suppressed` | *Reserved for contract stability — no longer returned* | Keep any existing handler, but do not expect it to fire. |
-| 429 | `usage_limit_exceeded` | Monthly plan quota exhausted | Do not retry. Upgrade, or wait for the quota to reset on the first of the next UTC calendar month. |
+| 429 | `usage_limit_exceeded` | Monthly plan quota exhausted, or fewer sends left than the request has recipients | Do not retry. Upgrade, send to fewer recipients, or wait for the quota to reset on the first of the next UTC calendar month. |
 | 429 | — | Per-key rate limit exceeded (60/min) | Retry with exponential backoff from 1s, and spread bursts out. |
 | 500 | `internal_error` | Unexpected error on our side | Retry once after 2–5s, then alert us with the timestamp. |
 | 502 | `queue_error` | Message could not be accepted | Nothing was sent and nothing was counted. Safe to retry: 1s, 2s, 4s, 8s. |
@@ -927,9 +958,10 @@ with a link to the page that fixes it.
 - **Free BYOC is free forever.** No card, no expiry, no time limit.
 - Quotas reset at the start of each **UTC calendar month**. There is no annual billing.
 
-Usage is counted exactly: every send claims its slot in the monthly count atomically before it is
-queued, so the limit is a hard cut-off even under concurrency, and a send that fails to queue gives
-its slot back. Hitting a plan's email limit is not a refundable event. Refund requests must
+Usage is counted exactly, one slot per recipient (`to`, `cc` and `bcc` alike, as Amazon SES
+counts them): every send claims all its slots in the monthly count atomically before it is queued,
+so the limit is a hard cut-off even under concurrency, and a send that fails to queue gives its
+slots back. Hitting a plan's email limit is not a refundable event. Refund requests must
 be raised within 14 days of the charge — 30 days for billing errors; see the
 [refund policy](https://sendfleet.net/refund-policy/).
 
@@ -983,7 +1015,7 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 | Requests per minute | 60 per API key (all plans) |
 | Failed auth attempts | 10 per IP per 60 seconds |
 | Sign-up / login / password-reset attempts | Rate limited per IP over a 5-minute window |
-| Recipients per request | 1 |
+| Recipients per request | 50 across `to`, `cc` and `bcc`, each counted as one send |
 | Subject length | 256 characters |
 | Sender name length | 156 characters |
 | Attachments per message | 20 |
