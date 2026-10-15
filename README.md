@@ -146,7 +146,7 @@ Request bodies are JSON; responses are always JSON. This is the only sending end
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `to` | email or email[] | **Yes** | One address, or a list. `to`, `cc` and `bcc` together hold at most **50** recipients (the Amazon SES per-message limit), and no address may appear twice across them. |
+| `to` | email or email[] | **Yes** | One address, or a list. `to`, `cc` and `bcc` together hold at most **50** recipients (the Amazon SES per-message limit), and no address may appear twice across them. A free-plan account also has its own per-account cap, lower at first and rising with the account's age — see [Recipients per message](#recipients-per-message). |
 | `cc` | email or email[] | No | Copy recipients, shown to everyone in the `Cc` header. |
 | `bcc` | email or email[] | No | Blind-copy recipients. They receive the message and appear in no header. |
 | `from_email` | email | Effectively yes | Must belong to a verified, send-ready domain in your account. **This field drives routing.** Omit it and it falls back to your account login email, which is almost never a sending domain, so the call fails with `domain_not_registered`. |
@@ -159,6 +159,34 @@ Request bodies are JSON; responses are always JSON. This is the only sending end
 
 **At least one of `message`, `html`, or `attachments` must be present.** None is individually
 required, but a request carrying none of the three is rejected with a `400`.
+
+### Recipients per message
+
+Every plan can send up to **50 recipients in one message** — that is Amazon SES's own ceiling for a
+single send, and it is the number that matters once you are sending regularly.
+
+A **free-plan account** starts lower and climbs, because a new account is the one most likely to be
+holding a list that has gone stale, and one send to fifty addresses produces fifty simultaneous
+bounces. Those bounces land on the SES reputation everyone on Shared SES delivers through, not only
+on the account that sent them.
+
+| Account age | Recipients per message |
+|---|---|
+| Under 7 days | 5 |
+| 7 to 30 days | 10 |
+| 30 to 90 days | 25 |
+| 90 days and over | 50 |
+
+The cap is per message, not per day or per month, and it counts `to`, `cc` and `bcc` together. Going
+over it is refused with `403 recipient_limit_exceeded`, and nothing is sent and nothing is counted
+against your monthly allowance.
+
+**Any paid plan is at 50 from the first send.** Subscribing never puts you on the ladder — an account
+that has just paid is not throttled on arrival.
+
+If you need more than the ladder allows before it gets there, email
+[support@sendfleet.net](mailto:support@sendfleet.net) and we will raise it for your account. We
+cannot go past 50, because that is what SES accepts per message.
 
 ### Several recipients
 
@@ -180,6 +208,10 @@ One request sends **one message** to everyone in `to`, `cc` and `bcc`:
   with `429 usage_limit_exceeded`; it never goes to only some of its recipients.
 - **At most 50 recipients** across the three fields, and **no address twice** (compared
   case-insensitively). Either is a `400`.
+- **A free-plan account has its own per-send cap**, lower than 50 until the account has existed
+  a while. Over it is a `403 recipient_limit_exceeded`, not a `400` — the payload is well-formed,
+  the account is simply not allowed that many at once. See
+  [Recipients per message](#recipients-per-message).
 - **On Shared SES every recipient is its own entry** in your email log and gets its own webhooks,
   all under the send's one `idempotency_key`, with the address in `recipient`.
 - **The Free plan's Shared smoke test allows no `cc` or `bcc`** — it reaches your own address only.
@@ -757,6 +789,7 @@ human-readable and explicitly non-contractual.
 | 400 | — | Malformed body: bad email, missing `message`/`html`/`attachments`, more than 50 recipients, a repeated recipient, too many attachments, attachment size or type violation | Fix the payload. Do not retry unchanged. |
 | 403 | — | Missing, invalid, revoked, or expired API key. This body carries no `error` code, so a bare 403 with no `error` field means the key was the problem. | Fix the key. |
 | 403 | `unauthorized` | Account not entitled to this path — email unverified, no active plan granting it, shared sending unavailable, BYOC not yet configured, or a Free plan Shared smoke test addressed to anyone but your own verified address | Verify the account email, check the plan, finish BYOC setup, or send the smoke test to yourself. |
+| 403 | `recipient_limit_exceeded` | The message has more recipients than this account may send to at once. Free plan only; the cap rises with the account's age and is at the SES ceiling from 90 days. | Send fewer recipients, split into more messages, or upgrade — the `detail` says which. |
 | 403 | `domain_not_registered` | `from_email` domain is not in your account | Add the domain first. |
 | 403 | `domain_not_allowed` | API key is scoped to a different set of domains | Use the right key or widen its scope. |
 | 403 | `domain_not_verified` | SES ownership or DKIM not yet confirmed | Add the DNS records and verify. |
