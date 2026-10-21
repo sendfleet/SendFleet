@@ -62,7 +62,7 @@ registered in **SendFleet's**.
 | **Sender reputation** | Isolated to your AWS account | Shared pool across Managed accounts |
 | **AWS account required** | Yes (yours, out of sandbox) | No |
 | **Manual approval required** | No | No |
-| **Monthly send limit** | 50 (Free) or unlimited ($9) | 5,000 / 25,000 / 100,000 |
+| **Monthly send limit** | 50 (Free) or 1,000,000 ($9) | 5,000 / 25,000 / 100,000 |
 | **Email log dashboard** | — (use your SES / CloudWatch) | Full 14-day history |
 | **Delivery outcomes** | In your own AWS account | Managed for you |
 | **Webhook delivery events** | — | ✓ |
@@ -572,12 +572,12 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 | Plan | Sends through | Monthly limit | Price |
 |---|---|---|---|
 | **Free BYOC** | Your AWS SES (BYOC) — plus a Shared smoke test to your own address | 50 (both together) | **Free** |
-| **BYOC** | Your AWS SES (BYOC) | Unlimited* | **$9/mo** |
+| **BYOC** | Your AWS SES (BYOC) | 1,000,000* | **$9/mo** |
 | **Managed Starter** | SendFleet Shared SES | 5,000 | **$5/mo** |
 | **Managed Growth** | SendFleet Shared SES | 25,000 | **$15/mo** |
 | **Managed Pro** | SendFleet Shared SES | 100,000 | **$59/mo** |
 
-\* *Unlimited = no SendFleet cap. Your own AWS SES sending quota still applies.*
+\* *Your own AWS SES sending quota still applies.*
 
 ### Compare every plan
 
@@ -588,7 +588,7 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 | **Recipients, subjects, bodies stored by us** | Never for BYOC sends (smoke tests are logged 14 days) | Never | Stored in logs | Stored in logs | Stored in logs |
 | **Reputation isolated per-customer** | ✓ | ✓ | — | — | — |
 | **Manual account approval** | Not required | Not required | Not required | Not required | Not required |
-| **Monthly email volume** | 50 | Unlimited* | 5,000 | 25,000 | 100,000 |
+| **Monthly email volume** | 50 | 1M | 5,000 | 25,000 | 100,000 |
 | **REST API access** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Unlimited API keys** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Email log history** | — Privacy by design | — Privacy by design | 14 days | 14 days | 14 days |
@@ -603,7 +603,7 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 
 - **Free BYOC** — Validate your integration end-to-end before committing to anything. 50 emails a
   month, no credit card, no time limit. Includes a Shared smoke test to your own address, so you can
-  try a request before setting up AWS; it cannot send to anyone else. Upgrade to $9/month for unlimited sends with no other
+  try a request before setting up AWS; it cannot send to anyone else. Upgrade to $9/month for 1 million sends with no other
   changes to your code.
 - **BYOC ($9)** — You want your own sender reputation and no message content retained by us, and 50
   emails a month is too low. Removes the SendFleet cap entirely. Requires a validated IAM role
@@ -1072,7 +1072,7 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 | Sender domains per account | Unlimited |
 | API keys per account | Unlimited |
 | Email log retention (Shared SES) | 14 days |
-| Monthly send limit | 50 / Unlimited / 5,000 / 25,000 / 100,000 by plan |
+| Monthly send limit | 50 / 1,000,000 / 5,000 / 25,000 / 100,000 by plan |
 | DNS propagation | A few minutes, up to 48 hours |
 | Test-address sends | Count against the monthly send limit like any other send; never against the bounce or complaint rates |
 | Webhook delivery timeout | 5 seconds, no retries |
