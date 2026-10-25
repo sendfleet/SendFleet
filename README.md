@@ -11,7 +11,8 @@
 
 > **SendFleet is a transactional email API with two sending modes.**
 > Route mail through your own AWS SES account (BYOC) or through SendFleet's managed sending
-> infrastructure. Same endpoint, same JSON payload, same response shape. On BYOC, recipients,
+> infrastructure. Both modes use the same sending endpoint and request fields, with mode-specific
+> limits and response fields. On BYOC, recipients,
 > subjects, and bodies are never written to our database. No SDK required.
 
 <br>
@@ -20,6 +21,7 @@
 
 - [Two modes. One endpoint.](#two-modes-one-endpoint)
 - [Quickstart](#quickstart)
+- [API base URL and endpoints](#api-base-url-and-endpoints)
 - [Send endpoint](#send-endpoint)
 - [Attachments](#attachments)
 - [Correlating a send with its events](#correlating-a-send-with-its-events)
@@ -47,8 +49,7 @@ API call looks identical either way.
 
 The routing decision is automatic. It is made from the **sending mode attached to the domain** in
 your `from_email`. That mode is fixed when the domain is added and cannot be changed afterwards:
-a BYOC domain is registered as an identity in **your** AWS SES account, a Shared SES domain is
-registered in **SendFleet's**.
+a BYOC domain sends through **your** AWS SES account, and a Shared SES domain uses managed sending.
 
 > **Before you switch plans, read this.** A domain's sending mode is permanent. If you move from a
 > BYOC plan to a Managed plan — or the other way — your existing domains keep their original mode
@@ -97,8 +98,8 @@ curl -X POST https://api.sendfleet.net/v1/send \
 }
 ```
 
-A `200 OK` means the message was **accepted and queued**. Delivery is asynchronous, so this is not
-yet a delivery confirmation. Use [webhooks](#webhooks) to learn what happened.
+A `200 OK` means the message was **accepted and queued**, not delivered. On Managed plans, use
+[webhooks](#webhooks) to track delivery. For BYOC sends, use your own SES delivery events.
 
 The same call in other languages — the request body is identical:
 
@@ -135,6 +136,21 @@ await fetch("https://api.sendfleet.net/v1/send", {
 
 <br>
 
+## API base URL and endpoints
+
+**Base URL: `https://api.sendfleet.net/v1`**
+
+| Method | URL | Purpose |
+|---|---|---|
+| `POST` | `https://api.sendfleet.net/v1/send` | Send an email |
+| `GET` | `https://api.sendfleet.net/v1/me` | Read account details and current-month usage |
+
+Authenticate both endpoints with `X-API-Key`. Sending requires a JSON body and
+`Content-Type: application/json`; the account endpoint requires no request body. API responses
+are JSON. Manage domains, API keys, webhooks and billing in the dashboard.
+
+<br>
+
 ## Send endpoint
 
 **`POST https://api.sendfleet.net/v1/send`**
@@ -146,7 +162,7 @@ Request bodies are JSON; responses are always JSON. This is the only sending end
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `to` | email or email[] | **Yes** | One address, or a list. `to`, `cc` and `bcc` together hold at most **50** recipients (the Amazon SES per-message limit), and no address may appear twice across them. Each sending path has its own per-message ceiling, and on Shared SES it is lower at first and rises with the account — see [Recipients per message](#recipients-per-message). |
+| `to` | email or email[] | **Yes** | One address, or a list. `to`, `cc` and `bcc` together hold at most **50** recipients (the Amazon SES per-message limit), and no address may appear twice across them. Each sending path has its own per-message rule, and on Shared SES `to` carries exactly one address — see [Recipients per message](#recipients-per-message). |
 | `cc` | email or email[] | No | Copy recipients, shown to everyone in the `Cc` header. |
 | `bcc` | email or email[] | No | Blind-copy recipients. They receive the message and appear in no header. |
 | `from_email` | email | Effectively yes | Must belong to a verified, send-ready domain in your account. **This field drives routing.** Omit it and it falls back to your account login email, which is almost never a sending domain, so the call fails with `domain_not_registered`. |
@@ -162,50 +178,42 @@ required, but a request carrying none of the three is rejected with a `400`.
 
 ### Recipients per message
 
-**The ceiling depends on which path you send through**, because the two are paid for out of different
-accounts and constrained by different things.
+**Recipient limits depend on the sending mode.**
 
-| Path | Recipients per message |
-|---|---|
-| **BYOC** — your own AWS SES account | **50**, from your first send. That is Amazon SES's own per-message limit |
-| **Shared SES** — SendFleet's account | **10**, from your first subscription, rising to its own ceiling |
+| Path | Recipients in `to` | Recipients per message |
+|---|---|---|
+| **BYOC** — your own AWS SES account | A string or a list | **50** across `to`, `cc` and `bcc`, from your first send. That is Amazon SES's own per-message limit |
+| **Shared SES** — SendFleet's account | **Exactly one** | **5** across `to`, `cc` and `bcc` — the one in `to`, plus up to four in `cc` and `bcc` |
 
-**On Shared SES the number is set by throughput, not by preference.** SendFleet's account sends at
-**14 messages per second in total, across every customer on it**, and Amazon SES charges **every
-recipient of a message** against that rate. A single request addressed to fifty is therefore fifty of
-those fourteen, spent inside one API call. Amazon SES refuses it — and a refused send is the worst
-outcome we could hand you, because the message may or may not have been accepted and the response
-cannot tell you which.
+If you need more than five recipients in one message, use BYOC. Your own SES sending quotas
+also apply to BYOC sends.
 
-Ten recipients is about 0.7 seconds of that budget for one call, which leaves room for the handful of
-concurrent sends a transactional integration makes. **If you need to address more people in one
-message, send through your own AWS SES account** — there the limit really is 50, and the quota really
-is yours.
+**On Shared SES the message is addressed to exactly one person.** `to` carries a single address, and
+the rest of the allowance rides in `cc` and `bcc`:
 
-**On Shared SES the limit opens at 5 and rises with your account:**
+```json
+{
+  "from_email": "hello@yourdomain.com",
+  "to": "primary@example.com",
+  "cc": ["second@example.com", "third@example.com"],
+  "bcc": ["fourth@example.com", "fifth@example.com"],
+  "subject": "Order update",
+  "message": "Your order has shipped."
+}
+```
 
-| Time since your **first subscription** | Recipients per message |
-|---|---|
-| Under 30 days | 5 |
-| 30 days and over | 10 |
-
-The clock starts when you **first subscribed**, not when you created the account. Creating an account
-is not a measure of trust — an address can be registered months before anything is sent through it,
-and an address that subscribes today has no history of sending at all. First subscription is the
-moment the account could first reach the shared reputation.
+That is five recipients, each counted as one send, and it is the most one message on the shared path
+may carry. More than one address in `to` is refused with `403 recipient_limit_exceeded`.
+A single address can be a string or a one-item list. Nothing is sent or counted against your
+allowance when the request is refused.
 
 **The limit is per message**, not per day or per month, and it counts `to`, `cc` and `bcc` together.
 Going over it is refused with `403 recipient_limit_exceeded`: nothing is sent, and nothing is counted
 against your monthly allowance.
 
-If you need more than the ladder allows before it gets there, email
-[support@sendfleet.net](mailto:support@sendfleet.net) and we will raise it for your account. We cannot
-go past the ceiling for the path you are on, because on Shared SES that figure is what our account
-can deliver.
-
 ### Several recipients
 
-One request sends **one message** to everyone in `to`, `cc` and `bcc`:
+One request sends **one message** to everyone in `to`, `cc` and `bcc`. This example uses BYOC:
 
 ```json
 {
@@ -223,10 +231,9 @@ One request sends **one message** to everyone in `to`, `cc` and `bcc`:
   with `429 usage_limit_exceeded`; it never goes to only some of its recipients.
 - **At most 50 recipients** across the three fields, and **no address twice** (compared
   case-insensitively). Either is a `400`.
-- **The per-message ceiling is set by the sending path**, not by the plan: 50 on BYOC, 10 on Shared
-  SES, and lower on Shared SES for the first 30 days of a subscription. Over it is a
-  `403 recipient_limit_exceeded`, not a `400` — the payload is well-formed, the account is simply not
-  allowed that many at once. See [Recipients per message](#recipients-per-message).
+- **Shared SES supports one address in `to` and up to five recipients in total.** Exceeding
+  either Shared SES limit returns `403 recipient_limit_exceeded`. More than 50 recipients
+  in any mode fails request validation with `400`. See [Recipients per message](#recipients-per-message).
 - **On Shared SES every recipient is its own entry** in your email log and gets its own webhooks,
   all under the send's one `idempotency_key`, with the address in `recipient`.
 - **The Free plan's Shared smoke test allows no `cc` or `bcc`** — it reaches your own address only.
@@ -255,7 +262,7 @@ One request sends **one message** to everyone in `to`, `cc` and `bcc`:
 | `message` | both | Human-readable confirmation. Wording differs between modes — **do not branch on it**. |
 | `message_id` | both | Opaque reference for this accepted request. Quote it to support about a specific send. It does **not** appear on any webhook. |
 | `idempotency_key` | **Shared SES only** | The correlation key for this send. The same value appears on every webhook fired for it. Absent on BYOC responses. |
-| `mode` | both | `"byoc"` or `"shared"` — which path delivered the message. |
+| `mode` | both | `"byoc"` or `"shared"` — the sending mode selected for this request, not a delivery confirmation. |
 | `attachments` | both | Count of attachments accepted. Present only when the request included attachments. |
 | `recipients` | both | Number of recipients across `to`, `cc` and `bcc`, each counted as one send. Present only when there is more than one. |
 | `warnings` | **Shared SES only** | Non-blocking deliverability gaps, such as a missing MAIL FROM or DMARC record. |
@@ -337,9 +344,9 @@ all the way to delivery.
 correlation `idempotency_key` is the only field to use.
 
 > **Retry safely.** These keys are correlation handles, not de-duplication tokens — SendFleet does
-> not suppress a second identical call. If a send times out or returns `502`, check your own
-> delivery state before retrying, or your recipient may get two copies. Webhooks are the reliable
-> way to know whether the first attempt landed.
+> not suppress a second identical call. If a send times out or you receive no response, check delivery
+> state before retrying: the message may already have been accepted. A confirmed `502 queue_error`
+> or `502 attachment_upload_failed` means nothing was sent and is safe to retry with backoff.
 
 <br>
 
@@ -378,7 +385,7 @@ curl https://api.sendfleet.net/v1/me -H "X-API-Key: YOUR_API_KEY"
 | `name`, `email` | Account identity. |
 | `is_verified` | Sending is blocked until this is `true`. |
 | `current_plan` | The plan whose allowance applies **right now**: `starter` (free), `byoc`, `managed_starter`, `growth`, or `pro`. An inactive, cancelled or `past_due` subscription reports `starter`, because that is what you are metered against — read this field, not your billing history, when you want to know your limit. |
-| `byoc_usage_current_month` | BYOC sends this calendar month (UTC). **On Free BYOC this is the plan's one counter** and includes Shared smoke-test sends (see [Free plan: the Shared smoke test](#free-plan-the-shared-smoke-test)); it is the number checked against the 50. |
+| `byoc_usage_current_month` | BYOC sends this calendar month (UTC). **On Free BYOC this is the plan's one counter** and includes Shared smoke-test sends (see [Free plan: the Shared smoke test](#free-plan-the-shared-smoke-test)); it is the number checked against the 50. On BYOC it is the number checked against the 1,000,000. |
 | `shared_usage_current_month` | Shared sends this calendar month. On a Managed plan this is exactly the number checked against your plan limit. On Free BYOC it only breaks out how many of your sends were smoke tests. |
 | `shared_delivered_current_month` | Feeds your delivery rate. |
 | `shared_bounced_current_month` | Feeds your bounce rate. |
@@ -391,12 +398,11 @@ A month with no activity returns zero rather than omitting the field. Previous m
 included. `GET /v1/me` counts against the same 60 requests/minute limit as sending — call it at
 startup or on a schedule, not before every individual email.
 
-`GET https://api.sendfleet.net/health` is an unauthenticated liveness endpoint.
+The response is a snapshot, not authorization or a quota reservation for a future send. Always
+handle the send response: key scope, domain readiness and sending restrictions also apply.
 
-> **Base URL.** The API is served only from `https://api.sendfleet.net`. An integration still
-> calling `https://sendfleet.net/api/send/` or `/api/me/` must switch to `/v1/send` and `/v1/me` on
-> the API host; the headers, request body and responses are identical. The dashboard stays at
-> `sendfleet.net/dashboard`.
+`GET https://api.sendfleet.net/health` is an unauthenticated liveness endpoint. It does not confirm
+account readiness or delivery status.
 
 <br>
 
@@ -411,7 +417,7 @@ Create keys in **Dashboard → API Keys**. There is no limit — every plan incl
 | **Reveal** | Shown exactly once, immediately after creation. A lost key cannot be recovered. |
 | **Header** | `X-API-Key`. Header names are case-insensitive, so `x-api-key` is fine. `Authorization` is not. |
 | **Expiry** | Optional, set at creation. An expiry date cannot be extended afterwards. Expired keys are rejected and stay visible in your dashboard as an audit trail. |
-| **Revoke** | Immediate and irreversible — the key stops working on the next request. Plan for up to two minutes if you need to be conservative. The record is kept so you retain the history of what existed and when it was disabled. |
+| **Revoke** | Once confirmed, subsequent API requests using the key are rejected. Irreversible; messages already accepted for delivery are not cancelled. The record is retained as an audit trail. |
 | **Delete** | Permanent. The record, its hash, and its domain restrictions are removed and cannot be restored by anyone, including support. |
 | **Domain scope** | Optional. A scoped key may only send from the selected domains; anything else returns `403` with `domain_not_allowed`. |
 | **Rate limit** | **60 requests per minute per key**, on every plan. |
@@ -474,10 +480,9 @@ requests carrying the correct value can assume your role.
 and there is no reason to remove it — the value is generated for you and pre-filled in the template
 in your dashboard.
 
-### How each send reaches your account
+### Access to your SES account
 
-SendFleet assumes the role you created, in your account, for a short-lived session of **up to 15
-minutes**, refreshed continuously, and calls SES with those temporary credentials. No long-lived
+SendFleet uses the IAM role you created to obtain short-lived credentials for SES access. No long-lived
 credential *of yours* is ever stored. The role grants only SES permissions, and you can revoke it at
 any moment from your own AWS console — sending stops immediately.
 
@@ -496,7 +501,8 @@ discarded, exactly as they are on Managed plans. See [Attachments](#attachments)
 ### BYOC limits
 
 - **Free BYOC** — 50 emails per month.
-- **BYOC ($9/mo)** — no SendFleet cap. Your own AWS SES sending quota still applies.
+- **BYOC ($9/mo)** — 1,000,000 emails per month. Your own AWS SES sending quota also applies, and
+  whichever is lower is the limit you meet first. Need more? Email support@sendfleet.net.
 
 The Free BYOC allowance also covers the [Shared smoke test](#free-plan-the-shared-smoke-test): one
 monthly counter, whichever path the send takes.
@@ -545,7 +551,9 @@ you set up AWS or pick a plan. **It is a smoke test, not a sending path.**
 
 - **One recipient:** the email address you signed up with, exactly. Any other `to` — a colleague, a
   `+tag` variant, a SendFleet test address, the SES simulator — is refused with
-  `403 unauthorized` and nothing is queued. So are a second `to` address and any `cc` or `bcc`.
+  `403 unauthorized` and nothing is queued. So is any `cc` or `bcc`. A second address in `to` is
+  refused even earlier, by the shared path's one-address rule, with
+  `403 recipient_limit_exceeded` — the same answer, under a different code.
 - **No redirection:** `reply_to` may only be empty, your own address, or the sender address.
   `from_name` may not contain an address, line breaks, or the characters `< > @ , ; "`, and
   `subject` may not contain line breaks.
@@ -577,7 +585,7 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 | **Managed Growth** | SendFleet Shared SES | 25,000 | **$15/mo** |
 | **Managed Pro** | SendFleet Shared SES | 100,000 | **$59/mo** |
 
-\* *Your own AWS SES sending quota still applies.*
+\* *Your own AWS SES sending quota also applies on BYOC; whichever is lower is the limit you meet first.*
 
 ### Compare every plan
 
@@ -588,7 +596,7 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 | **Recipients, subjects, bodies stored by us** | Never for BYOC sends (smoke tests are logged 14 days) | Never | Stored in logs | Stored in logs | Stored in logs |
 | **Reputation isolated per-customer** | ✓ | ✓ | — | — | — |
 | **Manual account approval** | Not required | Not required | Not required | Not required | Not required |
-| **Monthly email volume** | 50 | 1M | 5,000 | 25,000 | 100,000 |
+| **Monthly email volume** | 50 | 1,000,000* | 5,000 | 25,000 | 100,000 |
 | **REST API access** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Unlimited API keys** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Email log history** | — Privacy by design | — Privacy by design | 14 days | 14 days | 14 days |
@@ -603,11 +611,11 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 
 - **Free BYOC** — Validate your integration end-to-end before committing to anything. 50 emails a
   month, no credit card, no time limit. Includes a Shared smoke test to your own address, so you can
-  try a request before setting up AWS; it cannot send to anyone else. Upgrade to $9/month for 1 million sends with no other
-  changes to your code.
+  try a request before setting up AWS; it cannot send to anyone else. Upgrade to $9/month for 1,000,000 sends a month with no
+  other changes to your code.
 - **BYOC ($9)** — You want your own sender reputation and no message content retained by us, and 50
-  emails a month is too low. Removes the SendFleet cap entirely. Requires a validated IAM role
-  first.
+  emails a month is too low. Raises the SendFleet cap to 1,000,000 emails a month. Requires a
+  validated IAM role first.
 - **Managed Starter ($5)** — You want logs, webhooks, and handled bounces without touching AWS at
   all. 5,000 emails a month.
 - **Managed Growth ($15)** — The working default for a production app. 25,000 emails a month with
@@ -804,7 +812,7 @@ human-readable and explicitly non-contractual.
 | 400 | — | Malformed body: bad email, missing `message`/`html`/`attachments`, more than 50 recipients, a repeated recipient, too many attachments, attachment size or type violation | Fix the payload. Do not retry unchanged. |
 | 403 | — | Missing, invalid, revoked, or expired API key. This body carries no `error` code, so a bare 403 with no `error` field means the key was the problem. | Fix the key. |
 | 403 | `unauthorized` | Account not entitled to this path — email unverified, no active plan granting it, shared sending unavailable, BYOC not yet configured, or a Free plan Shared smoke test addressed to anyone but your own verified address | Verify the account email, check the plan, finish BYOC setup, or send the smoke test to yourself. |
-| 403 | `recipient_limit_exceeded` | The message has more recipients than this account may send to at once. 50 on BYOC; on Shared SES, 5 for the first 30 days of a subscription then 10 — the shared account's own throughput is the ceiling. | Send fewer recipients, split into more messages, or send through your own AWS SES account — the `detail` says which. |
+| 403 | `recipient_limit_exceeded` | The message is shaped or sized in a way this account may not send on the path it took. 50 across `to`, `cc` and `bcc` on BYOC, where `to` takes a string or a list. On Shared SES, `to` must carry exactly one address and the message may carry 5 in total. | Put one address in `to` and move the rest to `cc`/`bcc`, or send through your own AWS SES account — the `detail` says which. |
 | 403 | `domain_not_registered` | `from_email` domain is not in your account | Add the domain first. |
 | 403 | `domain_not_allowed` | API key is scoped to a different set of domains | Use the right key or widen its scope. |
 | 403 | `domain_not_verified` | SES ownership or DKIM not yet confirmed | Add the DNS records and verify. |
@@ -812,7 +820,7 @@ human-readable and explicitly non-contractual.
 | 403 | `domain_mode_mismatch` | The domain's sending mode does not match your plan | Add a domain for the mode your plan uses, or switch plans. |
 | 403 | `sending_suspended` | Sending stopped on your account: a 24-hour pause that lifts by itself, or a suspension | Check the `detail`: a temporary pause resumes on its own; a suspension needs a support review. |
 | 422 | `recipient_suppressed` | *Reserved for contract stability — no longer returned* | Keep any existing handler, but do not expect it to fire. |
-| 429 | `usage_limit_exceeded` | Monthly plan quota exhausted, or fewer sends left than the request has recipients | Do not retry. Upgrade, send to fewer recipients, or wait for the quota to reset on the first of the next UTC calendar month. |
+| 429 | `usage_limit_exceeded` | Monthly plan quota exhausted, or fewer sends left than the request has recipients | Do not retry. Upgrade (BYOC is the largest plan; above it, email support@sendfleet.net), send to fewer recipients, or wait for the quota to reset on the first of the next UTC calendar month. |
 | 429 | — | Per-key rate limit exceeded (60/min) | Retry with exponential backoff from 1s, and spread bursts out. |
 | 500 | `internal_error` | Unexpected error on our side | Retry once after 2–5s, then alert us with the timestamp. |
 | 502 | `queue_error` | Message could not be accepted | Nothing was sent and nothing was counted. Safe to retry: 1s, 2s, 4s, 8s. |
@@ -862,21 +870,12 @@ the address undeliverable on your side and stop sending to it.
 > delivering anything. Keep your own suppression list and filter before you call the API — that is
 > cheaper and more predictable than discovering it through webhooks.
 
-### How sending quality is measured
+### Protecting sending quality
 
-Bounce and complaint rates are measured continuously across **three rolling windows** — a short
-acute window, 24 hours, and 14 days — each with its own limit. No window is judged below a minimum
-send count **and** a minimum failing-message count, because two bounces against ten sends is noise
-and we will not act on it. Complaint reports are weighted most heavily, since a spam report is a
-judgement about your mail rather than a transient delivery problem.
-
-New accounts are given lower volume floors while their sending history is still short — but not
-zero, and not one complaint. A brand-new account is not held to the same volume as a long-running
-one, and it is not exempted from the rules either.
-
-**We do not publish the numeric limits.** What keeps you clear of them is straightforward: keep
-hard bounce rates low, keep complaint rates very low, and send enough volume that a handful of
-transient failures cannot trip a window.
+SendFleet monitors bounce and complaint activity to protect deliverability on Shared SES.
+**Enforcement thresholds are not published.** Keep recipient lists accurate, send only expected
+mail, and remove addresses that hard-bounce or report spam. Use dashboard logs and delivery
+webhooks to identify problems and act promptly on account notices.
 
 **One exception you should design around:** a spam report classifying your mail as **fraud** or
 **virus** acts on its own, whatever the volume or rate around it. Everything else an inbox provider
@@ -933,8 +932,8 @@ BYOC accounts build reputation in their own AWS account and are monitored by AWS
 ### Testing an integration without mailing anyone
 
 SendFleet owns a set of addresses that behave like the outcomes you need to handle. Send to them and
-you get a real webhook and a real log entry, without emailing a real person and without touching your
-quota or your sending-quality numbers.
+you get a real webhook and a real log entry without emailing a real person. Test sends count
+against your monthly allowance but not your bounce or complaint rates.
 
 | Address | Result |
 |---|---|
@@ -1063,7 +1062,7 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 | Requests per minute | 60 per API key (all plans) |
 | Failed auth attempts | 10 per IP per 60 seconds |
 | Sign-up / login / password-reset attempts | Rate limited per IP over a 5-minute window |
-| Recipients per request | 50 on BYOC · 10 on Shared SES (5 for the first 30 days of a subscription), across `to`, `cc` and `bcc`, each counted as one send |
+| Recipients per request | 50 across `to`, `cc` and `bcc` on BYOC, where `to` takes a string or a list · on Shared SES, exactly **one** address in `to` and **5** in total — the one plus up to four in `cc`/`bcc`. Every recipient counts as one send |
 | Subject length | 256 characters |
 | Sender name length | 156 characters |
 | Attachments per message | 20 |
