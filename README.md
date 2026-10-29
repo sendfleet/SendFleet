@@ -12,8 +12,9 @@
 > **SendFleet is a transactional email API with two sending modes.**
 > Route mail through your own AWS SES account (BYOC) or through SendFleet's managed sending
 > infrastructure. Both modes use the same sending endpoint and request fields, with mode-specific
-> limits and response fields. On BYOC, recipients,
-> subjects, and bodies are never written to our database. No SDK required.
+> limits and response fields. On BYOC, connecting your AWS account is one click, SendFleet sets up
+> delivery tracking in it for you, and message bodies are never written to our database. No SDK
+> required.
 
 <br>
 
@@ -59,14 +60,15 @@ a BYOC domain sends through **your** AWS SES account, and a Shared SES domain us
 | | BYOC | Shared SES |
 |---|---|---|
 | **Sends through** | Your own AWS SES account | SendFleet's managed SES |
-| **Recipients, subjects, bodies stored on our servers** | Never | Yes — 14 days, in your dashboard |
+| **Recipients, subjects, bodies stored on our servers** | Bodies never. Recipients and subjects only while email logs are on (the default; 14 days) | Yes — 14 days, in your dashboard |
 | **Sender reputation** | Isolated to your AWS account | Shared pool across Managed accounts |
 | **AWS account required** | Yes (yours, out of sandbox) | No |
 | **Manual approval required** | No | No |
-| **Monthly send limit** | 50 (Free) or 1,000,000 ($9) | 5,000 / 25,000 / 100,000 |
-| **Email log dashboard** | — (use your SES / CloudWatch) | Full 14-day history |
-| **Delivery outcomes** | In your own AWS account | Managed for you |
-| **Webhook delivery events** | — | ✓ |
+| **Monthly send limit** | 3,000 (Free), or 20,000 included then pay as you go up to 1,000,000 ($5 + usage) | 5,000 / 25,000 / 100,000 |
+| **Email log dashboard** | Optional — 14 days, metadata only | Full 14-day history |
+| **Delivery outcomes** | Tracked from your own SES events | Managed for you |
+| **Webhook delivery events** | ✓ (BYOC plan) | ✓ |
+| **Bounce and complaint protection** | ✓ — levels you choose | Managed for you |
 | **Attachments** | ✓ | ✓ |
 
 <br>
@@ -94,12 +96,17 @@ curl -X POST https://api.sendfleet.net/v1/send \
   "success": true,
   "message": "Email queued for delivery via your SES account.",
   "message_id": "1a2b3c4d-5e6f-7890-abcd-ef1234567890",
+  "idempotency_key": "8f14e45fceea167a5a36dedd4bea2543",
   "mode": "byoc"
 }
 ```
 
-A `200 OK` means the message was **accepted and queued**, not delivered. On Managed plans, use
-[webhooks](#webhooks) to track delivery. For BYOC sends, use your own SES delivery events.
+`idempotency_key` is there because delivery tracking is on by default; a BYOC send with tracking
+off has none.
+
+A `200 OK` means the message was **accepted and queued**, not delivered. Use [webhooks](#webhooks)
+or your email log to track delivery — on BYOC, both come from your own SES account's events once
+delivery tracking is on.
 
 The same call in other languages — the request body is identical:
 
@@ -234,8 +241,9 @@ One request sends **one message** to everyone in `to`, `cc` and `bcc`. This exam
 - **Shared SES supports one address in `to` and up to five recipients in total.** Exceeding
   either Shared SES limit returns `403 recipient_limit_exceeded`. More than 50 recipients
   in any mode fails request validation with `400`. See [Recipients per message](#recipients-per-message).
-- **On Shared SES every recipient is its own entry** in your email log and gets its own webhooks,
-  all under the send's one `idempotency_key`, with the address in `recipient`.
+- **On Shared SES, and on BYOC with delivery tracking on, every recipient is its own entry** in your
+  email log (on BYOC, while email logs are on) and gets its own webhooks, all under the send's one
+  `idempotency_key`, with the address in `recipient`.
 - **The Free plan's Shared smoke test allows no `cc` or `bcc`** — it reaches your own address only.
   Free BYOC sending supports both.
 - **A SendFleet test address must be a send's only recipient.**
@@ -261,7 +269,7 @@ One request sends **one message** to everyone in `to`, `cc` and `bcc`. This exam
 | `success` | both | Always `true` on `200`. |
 | `message` | both | Human-readable confirmation. Wording differs between modes — **do not branch on it**. |
 | `message_id` | both | Opaque reference for this accepted request. Quote it to support about a specific send. It does **not** appear on any webhook. |
-| `idempotency_key` | **Shared SES only** | The correlation key for this send. The same value appears on every webhook fired for it. Absent on BYOC responses. |
+| `idempotency_key` | Shared SES, and BYOC with delivery tracking on | The correlation key for this send. The same value appears on every webhook fired for it. Absent on a BYOC send while tracking is off. |
 | `mode` | both | `"byoc"` or `"shared"` — the sending mode selected for this request, not a delivery confirmation. |
 | `attachments` | both | Count of attachments accepted. Present only when the request included attachments. |
 | `recipients` | both | Number of recipients across `to`, `cc` and `bcc`, each counted as one send. Present only when there is more than one. |
@@ -330,18 +338,20 @@ send a large HTML body.
 
 ## Correlating a send with its events
 
-Every accepted send is assigned a unique key, and on the managed path that key follows the message
-all the way to delivery.
+Every accepted send is assigned a unique key, and whenever delivery is tracked (always on Shared SES,
+and on BYOC with delivery tracking on) that key follows the message all the way to delivery.
 
 - **On Shared SES**, it is returned in the response as `idempotency_key` and appears on every
   webhook fired for that send. **Store it** — it is how you tie a response to its delivery events.
   A send to several recipients has one key and fires each event once per recipient, so match on
   `idempotency_key` and `recipient` together.
-- **On BYOC** there is no webhook and no log, so there is nothing to correlate against. Keep the
-  `message_id` for your own records and to quote to support.
+- **On BYOC with delivery tracking on**, it works the same way: the key is returned as
+  `idempotency_key`, travels with the message through your own SES account, and is on every webhook
+  and log entry for it. With tracking off there is nothing to correlate against; keep the
+  `message_id` for your own records.
 
-`message_id` is the only reference on BYOC responses. It never appears on a webhook, so for webhook
-correlation `idempotency_key` is the only field to use.
+`message_id` never appears on a webhook, so for webhook correlation `idempotency_key` is the only
+field to use.
 
 > **Retry safely.** These keys are correlation handles, not de-duplication tokens — SendFleet does
 > not suppress a second identical call. If a send times out or you receive no response, check delivery
@@ -385,13 +395,13 @@ curl https://api.sendfleet.net/v1/me -H "X-API-Key: YOUR_API_KEY"
 | `name`, `email` | Account identity. |
 | `is_verified` | Sending is blocked until this is `true`. |
 | `current_plan` | The plan whose allowance applies **right now**: `starter` (free), `byoc`, `managed_starter`, `growth`, or `pro`. An inactive, cancelled or `past_due` subscription reports `starter`, because that is what you are metered against — read this field, not your billing history, when you want to know your limit. |
-| `byoc_usage_current_month` | BYOC sends this calendar month (UTC). **On Free BYOC this is the plan's one counter** and includes Shared smoke-test sends (see [Free plan: the Shared smoke test](#free-plan-the-shared-smoke-test)); it is the number checked against the 50. On BYOC it is the number checked against the 1,000,000. |
+| `byoc_usage_current_month` | BYOC sends this calendar month (UTC). **On Free BYOC this is the plan's one counter** and includes Shared smoke-test sends (see [Free plan: the Shared smoke test](#free-plan-the-shared-smoke-test)); it is the number checked against the 3,000. On BYOC it is the number checked against the monthly cap you set (default 100,000, up to 1,000,000). |
 | `shared_usage_current_month` | Shared sends this calendar month. On a Managed plan this is exactly the number checked against your plan limit. On Free BYOC it only breaks out how many of your sends were smoke tests. |
 | `shared_delivered_current_month` | Feeds your delivery rate. |
 | `shared_bounced_current_month` | Feeds your bounce rate. |
 | `shared_complained_current_month` | Feeds your complaint rate. |
 | `shared_rejected_current_month` | Permanent rejections. |
-| `byoc_configured` | Whether your IAM role has been validated. |
+| `byoc_configured` | Whether your AWS account is connected and SendFleet can use it. |
 | `verified_byoc_domains` / `verified_shared_domains` | Verified domains per mode. |
 
 A month with no activity returns zero rather than omitting the field. Previous months are not
@@ -437,72 +447,119 @@ attempts from that address are temporarily blocked.
 
 ## BYOC: Bring Your Own SES
 
-BYOC delivers your email through **your own AWS SES account**. Recipients, subjects, and bodies never
-land in SendFleet's database, and your sender reputation is entirely your own.
+BYOC delivers your email through **your own AWS SES account**. Your sender reputation is entirely your
+own, message bodies never land in SendFleet's database, and SendFleet does the AWS work for you:
+connecting, delivery tracking, production access, and protecting your reputation.
 
-**What you need:**
-- An AWS account with SES approved for **production access** (out of sandbox). Sandbox accounts can
-  only send to verified addresses and are capped at 200 emails a day, which is not usable for real
-  sending.
-- A domain you control, so you can add DNS records.
-- Permission to create IAM roles in that AWS account.
+**What you need:** an AWS account you can create an IAM role in, and a domain you control. A brand
+new SES account is fine — SendFleet requests production access for it.
 
-**Setup in three steps:**
+### Connect in two steps
 
-1. **Create the IAM role.** In your AWS account, create a role named exactly
-   `SendFleet-BYOC-Role` — case-sensitive, and we only assume roles with that name. Paste in the
-   trust policy from your dashboard: it already contains SendFleet's account ID and **your** unique
-   ExternalId. Attach the permissions policy shown alongside it, which grants the SES actions
-   needed to send and to manage your sending identities.
-2. **Enter the Role ARN and region.** In **Dashboard → Settings → BYOC**, paste
-   `arn:aws:iam::123456789012:role/SendFleet-BYOC-Role` and pick your SES region. We confirm the
-   role can be assumed, that your SES account is out of sandbox, and that it has the required
-   permissions. IAM changes can take a short while to propagate — if validation fails right after
-   you create the role, wait a moment and retry.
-3. **Add a sending domain.** We register the SES identity in **your** account and show you the DNS
-   records to add.
+Open **Dashboard → AWS**.
 
-> **Validate your role before upgrading to the $9 BYOC plan.** Purchasing BYOC requires a validated
-> role ARN — you cannot check out the paid plan first and sort out IAM afterwards. Free BYOC has no
-> such requirement, so it is the easiest way to prove the integration works before you pay.
+1. **Create the role with one click.** The button opens AWS CloudFormation with a ready-made stack
+   that creates one IAM role, `SendFleet-BYOC-Role`. Tick the IAM acknowledgement and press
+   **Create stack**. (Prefer to do it by hand? The same page shows the exact trust and permissions
+   policies.)
+2. **Paste the role ARN** from the stack's **Outputs** tab and press **Connect**.
 
-### The ExternalId
+That is all. SES production access is separate in every AWS region, so SendFleet checks every
+region and sends from the one where your account is out of the sandbox (or from a region you pick,
+for example to keep mail in the EU). It validates the role, reads your SES account's health,
+switches on your suppression list and Auto Validation, and sets up delivery tracking — all in your
+account, automatically. Then add a sending domain and publish its DNS records.
 
-Every BYOC configuration gets a unique, randomly generated **ExternalId** — 48 hex characters, 192
-bits of entropy. It is generated when you first save your config, and it never changes.
+The stack opens in US East (N. Virginia) whatever region you send from: an IAM role is global.
 
-It must appear in the `Condition` block of your IAM trust policy. This prevents the
+### What the role allows
+
+Sending mail; registering and checking your sending domains; reading your SES account's health and
+reputation; requesting production access and switching on the account-level suppression list; and
+creating, repairing and removing SendFleet's own tracking resources — one configuration set and one
+SNS topic, both named `sendfleet-*`. Nothing else: it cannot read your mail, change IAM, or touch any
+other resource.
+
+Only SendFleet's own sending and management services can use the role, and only with your
+**ExternalId** — 48 hex characters, generated for your account and never changed. It prevents the
 [confused deputy attack](https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html):
-without it, anyone who learned your Role ARN could ask us to assume it on their behalf. Only
-requests carrying the correct value can assume your role.
+without it, anyone who learned your Role ARN could ask us to use it. **Never remove the ExternalId
+condition.** Delete the CloudFormation stack at any time to revoke SendFleet's access.
 
-**Never drop the ExternalId condition.** A role that trusts our account without it is exploitable,
-and there is no reason to remove it — the value is generated for you and pre-filled in the template
-in your dashboard.
+### Delivery tracking and what we store
 
-### Access to your SES account
+Choose one, and change it whenever you like:
 
-SendFleet uses the IAM role you created to obtain short-lived credentials for SES access. No long-lived
-credential *of yours* is ever stored. The role grants only SES permissions, and you can revoke it at
-any moment from your own AWS console — sending stops immediately.
+| Mode | What you get | What SendFleet stores |
+|---|---|---|
+| **Metrics, webhooks and email logs** (default) | Everything below, plus a 14-day email log | One row per recipient: address, status, timestamps, bounce and complaint detail, and the subject unless you turn subjects off. **Never the body.** |
+| **Metrics and webhooks** | Delivery and bounce rates, webhooks, reputation protection | Hourly counts only |
+| **Send only** | Sending | Only the monthly send counter |
 
-### What we store
+Tracking works by a configuration set in your SES account that reports events to SendFleet through
+an SNS topic. **AWS bills your account for each event published**, so you choose:
 
-Recipients, subjects, and bodies for BYOC sends exist only in transit and in your own SES account.
-SendFleet retains **no** of them — **only a monthly send counter**, used to enforce your plan limit.
-(Attachments are the one exception: they are staged for the duration of delivery and then
-discarded, exactly as they are on Managed plans. See [Attachments](#attachments).)
+- **Always on:** bounces, complaints and rejections — protection depends on them, and they are rare.
+- **Your choice:** deliveries (about one event per recipient, most of the cost) and delays.
+- **Free:** "sent". SendFleet records it itself when SES accepts the message; your account never
+  publishes it.
+
+With email logs on, every send appears in your log as **Queued** the moment it is accepted, and
+turns **Failed**, with the reason, if it never reaches SES.
+
+If the configuration set or topic is changed or deleted, SendFleet repairs it — unless you turned
+**automatic repair** off, in which case it only tells you. If they are removed again soon after a
+repair, SendFleet assumes you meant it, stops, and emails you. Your mail is never held up by
+tracking: if the configuration set is missing, the message is still sent, just untracked.
+
+**Every change SendFleet makes in your account is listed** under *Activity in your AWS account*,
+marked as yours or automatic. Your AWS CloudTrail shows the same calls.
+
+### Account health and production access
+
+Dashboard → AWS shows your SES account live: production access, AWS's view of your standing, your
+24-hour quota and sending rate, and the bounce and complaint rates AWS itself measures.
+
+**Still in the SES sandbox?** Pick the region, fill in your website and the kind of mail you send, and
+SendFleet files the production access request with AWS for you. It also switches on your account-level suppression
+list, so the request truthfully describes how bounces and complaints are handled. AWS answers by
+email, usually within a day.
+
+### Reputation protection
+
+AWS reviews an SES account once its bounce rate reaches 5% or its complaint rate 0.1%. SendFleet
+watches your rates over 24 hours and 7 days and **pauses your sending before AWS has to**. Choose
+**High**, **Medium** (default), **Low** or **Off** — the dashboard shows each level's exact lines.
+You are emailed a warning first. A pause makes `/v1/send` return `403 sending_suspended` for your BYOC
+domains until you review the bounces and press **Resume** in Dashboard → AWS.
+
+### If access stops working
+
+If the role is deleted or its trust policy changed, SendFleet confirms the failure, stops accepting
+BYOC sends (`403 unauthorized`, with a message saying so), and emails you once. Messages already
+queued are retried briefly, then dropped rather than retried for days. Recreate the role and press
+**Reconnect**; SendFleet also notices on its own when access returns.
 
 ### Regions
 
-`us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`, `ap-southeast-1`, `ap-southeast-2`,
-`ap-northeast-1`, `ap-south-1`, `ca-central-1`, `sa-east-1`.
+`us-east-1`, `us-east-2`, `us-west-2`, `ca-central-1`, `sa-east-1`, `eu-west-1`, `eu-west-2`,
+`eu-central-1`, `eu-north-1`, `ap-south-1`, `ap-southeast-1`, `ap-southeast-2`, `ap-northeast-1`.
 
-### BYOC limits
+### BYOC limits and billing
 
-- **Free BYOC** — 50 emails per month.
-- **BYOC ($9/mo)** — 1,000,000 emails per month. Your own AWS SES sending quota also applies, and
-  whichever is lower is the limit you meet first. Need more? Email support@sendfleet.net.
+- **Free BYOC** — 3,000 emails per month, with delivery tracking and email logs. No webhooks.
+- **BYOC ($5/month + usage)** — 20,000 emails and 20,000 logged emails included each calendar month
+  (UTC). Beyond that, **$0.10 per 1,000 emails sent** and **$0.10 per 1,000 emails logged** (only
+  with email logs on), rounded up to the next 1,000 and added to your next renewal invoice. Webhooks
+  included. Your own AWS SES charges are billed by AWS, separately.
+- **What counts** — only usage while you are on the BYOC plan. Sends on the Free plan earlier in the
+  month, sends after the plan ends and emails Amazon SES did not accept are never charged. A month is
+  charged once; if your subscription is set to end, that month's usage so far is charged just before
+  it ends.
+- **Your monthly cap** — set it in Dashboard → AWS (default 100,000, up to 1,000,000). Sends past it
+  return `429 usage_limit_exceeded`, so a bug in your code can never run up a bill. Your own AWS SES
+  quota also applies; whichever is lower is the limit you meet first. Need more than 1,000,000?
+  Email support@sendfleet.net.
 
 The Free BYOC allowance also covers the [Shared smoke test](#free-plan-the-shared-smoke-test): one
 monthly counter, whichever path the send takes.
@@ -510,10 +567,6 @@ monthly counter, whichever path the send takes.
 Deleting your account does not reset it. Sign up again with the same address in the same calendar
 month (UTC) — letter case, a `+tag` and, for Gmail, dots do not make it a different one — and the
 new account continues from the sends the deleted one had used. The next month starts at zero.
-
-There are **no webhooks and no email logs on BYOC plans.** Your messages are processed entirely
-within your AWS account, so we have no access to their delivery events. Read them from your own SES
-event destinations and CloudWatch.
 
 <br>
 
@@ -558,7 +611,7 @@ you set up AWS or pick a plan. **It is a smoke test, not a sending path.**
   `from_name` may not contain an address, line breaks, or the characters `< > @ , ; "`, and
   `subject` may not contain line breaks.
 - **One Shared domain**, verified the same way as on a Managed plan.
-- **Same allowance:** smoke tests count towards Free BYOC's 50 emails a month, together with your
+- **Same allowance:** smoke tests count towards Free BYOC's 3,000 emails a month, together with your
   BYOC sends.
 - **No webhooks.** Smoke-test sends appear in your email log (14 days, content included — this is
   Shared SES), but no webhook fires for them, even if your account has endpoints left over from a
@@ -579,43 +632,43 @@ Five plans. Two sending modes. All prices USD, billed monthly in advance.
 
 | Plan | Sends through | Monthly limit | Price |
 |---|---|---|---|
-| **Free BYOC** | Your AWS SES (BYOC) — plus a Shared smoke test to your own address | 50 (both together) | **Free** |
-| **BYOC** | Your AWS SES (BYOC) | 1,000,000* | **$9/mo** |
+| **Free BYOC** | Your AWS SES (BYOC) — plus a Shared smoke test to your own address | 3,000 (both together) | **Free** |
+| **BYOC** | Your AWS SES (BYOC) | 20,000 included, then pay as you go up to 1,000,000* | **$5/mo + usage** |
 | **Managed Starter** | SendFleet Shared SES | 5,000 | **$5/mo** |
 | **Managed Growth** | SendFleet Shared SES | 25,000 | **$15/mo** |
 | **Managed Pro** | SendFleet Shared SES | 100,000 | **$59/mo** |
 
-\* *Your own AWS SES sending quota also applies on BYOC; whichever is lower is the limit you meet first.*
+\* *$0.10 per 1,000 emails beyond 20,000, and $0.10 per 1,000 logged emails beyond 20,000. Your own monthly cap and your AWS SES sending quota also apply; whichever is lower is the limit you meet first.*
 
 ### Compare every plan
 
 | | Free BYOC | BYOC | Managed Starter | Managed Growth | Managed Pro |
 |---|---|---|---|---|---|
-| **Price** | $0/mo | $9/mo | $5/mo | $15/mo | $59/mo |
+| **Price** | $0/mo | $5/mo + usage | $5/mo | $15/mo | $59/mo |
 | **Sending infrastructure** | Your AWS SES | Your AWS SES | SendFleet SES | SendFleet SES | SendFleet SES |
-| **Recipients, subjects, bodies stored by us** | Never for BYOC sends (smoke tests are logged 14 days) | Never | Stored in logs | Stored in logs | Stored in logs |
+| **Recipients, subjects, bodies stored by us** | Bodies never; recipients and subjects only with email logs on (smoke tests are logged 14 days) | Bodies never; recipients and subjects only with email logs on | Stored in logs | Stored in logs | Stored in logs |
 | **Reputation isolated per-customer** | ✓ | ✓ | — | — | — |
 | **Manual account approval** | Not required | Not required | Not required | Not required | Not required |
-| **Monthly email volume** | 50 | 1,000,000* | 5,000 | 25,000 | 100,000 |
+| **Monthly email volume** | 3,000 | 20,000 included, up to 1,000,000* | 5,000 | 25,000 | 100,000 |
 | **REST API access** | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Unlimited API keys** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Email log history** | — Privacy by design | — Privacy by design | 14 days | 14 days | 14 days |
+| **Email log history** | Optional, 14 days, metadata only | Optional, 14 days, metadata only | 14 days | 14 days | 14 days |
 | **Domain verification** | Via your SES | Via your SES | Via our SES | Via our SES | Via our SES |
 | **Attachments** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Bounce & complaint handling** | Your AWS account | Your AWS account | ✓ | ✓ | ✓ |
+| **Bounce & complaint handling** | Tracking and protection in your AWS account | Tracking and protection in your AWS account | ✓ | ✓ | ✓ |
 | **Shared SES sending** | Smoke test only: your own address | — | ✓ | ✓ | ✓ |
-| **Webhook delivery events** | — | — | ✓ | ✓ | ✓ |
+| **Webhook delivery events** | — | ✓ | ✓ | ✓ | ✓ |
 | **Support channel** | Email | Email | Priority email | Priority email | Priority email |
 
 ### What each plan is for
 
-- **Free BYOC** — Validate your integration end-to-end before committing to anything. 50 emails a
+- **Free BYOC** — Validate your integration end-to-end before committing to anything. 3,000 emails a
   month, no credit card, no time limit. Includes a Shared smoke test to your own address, so you can
-  try a request before setting up AWS; it cannot send to anyone else. Upgrade to $9/month for 1,000,000 sends a month with no
-  other changes to your code.
-- **BYOC ($9)** — You want your own sender reputation and no message content retained by us, and 50
-  emails a month is too low. Raises the SendFleet cap to 1,000,000 emails a month. Requires a
-  validated IAM role first.
+  try a request before setting up AWS; it cannot send to anyone else. Upgrade to the $5 BYOC plan
+  with no other changes to your code.
+- **BYOC ($5 + usage)** — Your own SES and sender reputation, with SendFleet doing the AWS work:
+  delivery tracking, webhooks, email logs and bounce protection. 20,000 emails included each month,
+  then $0.10 per 1,000, with a cap you set. Requires a connected AWS account first.
 - **Managed Starter ($5)** — You want logs, webhooks, and handled bounces without touching AWS at
   all. 5,000 emails a month.
 - **Managed Growth ($15)** — The working default for a production app. 25,000 emails a month with
@@ -646,8 +699,9 @@ CNAME  <token2>._domainkey.yourdomain.com  <token2>.dkim.amazonses.com
 CNAME  <token3>._domainkey.yourdomain.com  <token3>.dkim.amazonses.com
 ```
 
-The `_sendfleet` value is unique to that domain on your account: it proves the domain is yours, not
-another account's that added the same name. Domains verified before this record existed do not need
+The `_sendfleet` value belongs to that domain on your account, and stays the same: remove the domain
+and add it again, or add it in the other sending mode, and the record you published still works. It
+proves the domain is yours, not another account's that added the same name. Domains verified before this record existed do not need
 it.
 
 A domain is **send-ready** once both checks pass: ownership verification (both TXT records) **and** DKIM. If
@@ -692,8 +746,10 @@ DNS propagation can take a few minutes and up to **48 hours**. Check status anyt
 
 ## Webhooks
 
-Available on **Managed plans only**. Your HTTPS endpoint receives real-time callbacks as messages
-move through the delivery lifecycle.
+Available on the **BYOC plan** and the **Managed plans**. Your HTTPS endpoint receives real-time
+callbacks as messages move through the delivery lifecycle. On BYOC they are built from your own SES
+account's events (delivery tracking must be on) and carry `"mode": "byoc"`; the payload is otherwise
+identical.
 
 | Event | When |
 |---|---|
@@ -811,16 +867,16 @@ human-readable and explicitly non-contractual.
 |---|---|---|---|
 | 400 | — | Malformed body: bad email, missing `message`/`html`/`attachments`, more than 50 recipients, a repeated recipient, too many attachments, attachment size or type violation | Fix the payload. Do not retry unchanged. |
 | 403 | — | Missing, invalid, revoked, or expired API key. This body carries no `error` code, so a bare 403 with no `error` field means the key was the problem. | Fix the key. |
-| 403 | `unauthorized` | Account not entitled to this path — email unverified, no active plan granting it, shared sending unavailable, BYOC not yet configured, or a Free plan Shared smoke test addressed to anyone but your own verified address | Verify the account email, check the plan, finish BYOC setup, or send the smoke test to yourself. |
+| 403 | `unauthorized` | Account not entitled to this path — email unverified, no active plan granting it, shared sending unavailable, BYOC not yet configured or its AWS access revoked, or a Free plan Shared smoke test addressed to anyone but your own verified address | Verify the account email, check the plan, finish or reconnect BYOC in Dashboard → AWS, or send the smoke test to yourself. |
 | 403 | `recipient_limit_exceeded` | The message is shaped or sized in a way this account may not send on the path it took. 50 across `to`, `cc` and `bcc` on BYOC, where `to` takes a string or a list. On Shared SES, `to` must carry exactly one address and the message may carry 5 in total. | Put one address in `to` and move the rest to `cc`/`bcc`, or send through your own AWS SES account — the `detail` says which. |
 | 403 | `domain_not_registered` | `from_email` domain is not in your account | Add the domain first. |
 | 403 | `domain_not_allowed` | API key is scoped to a different set of domains | Use the right key or widen its scope. |
 | 403 | `domain_not_verified` | SES ownership or DKIM not yet confirmed | Add the DNS records and verify. |
 | 403 | `dkim_not_verified` | All three DKIM CNAMEs not confirmed (Shared SES) | Publish the records, then verify DKIM. |
 | 403 | `domain_mode_mismatch` | The domain's sending mode does not match your plan | Add a domain for the mode your plan uses, or switch plans. |
-| 403 | `sending_suspended` | Sending stopped on your account: a 24-hour pause that lifts by itself, or a suspension | Check the `detail`: a temporary pause resumes on its own; a suspension needs a support review. |
+| 403 | `sending_suspended` | Sending stopped on your account: a 24-hour pause that lifts by itself, a suspension, or — on BYOC — your own reputation protection | Check the `detail`: a temporary pause resumes on its own; a protection pause resumes when you press Resume in Dashboard → AWS; a suspension needs a support review. |
 | 422 | `recipient_suppressed` | *Reserved for contract stability — no longer returned* | Keep any existing handler, but do not expect it to fire. |
-| 429 | `usage_limit_exceeded` | Monthly plan quota exhausted, or fewer sends left than the request has recipients | Do not retry. Upgrade (BYOC is the largest plan; above it, email support@sendfleet.net), send to fewer recipients, or wait for the quota to reset on the first of the next UTC calendar month. |
+| 429 | `usage_limit_exceeded` | Monthly plan quota or your own BYOC monthly cap exhausted, or fewer sends left than the request has recipients | Do not retry. Upgrade (BYOC is the largest plan; above it, email support@sendfleet.net), send to fewer recipients, or wait for the quota to reset on the first of the next UTC calendar month. |
 | 429 | — | Per-key rate limit exceeded (60/min) | Retry with exponential backoff from 1s, and spread bursts out. |
 | 500 | `internal_error` | Unexpected error on our side | Retry once after 2–5s, then alert us with the timestamp. |
 | 502 | `queue_error` | Message could not be accepted | Nothing was sent and nothing was counted. Safe to retry: 1s, 2s, 4s, 8s. |
@@ -927,7 +983,9 @@ rather than waiting for the counters to get there first.
 you changed about your list first — a clean list and an honest answer is usually enough to get an
 account back.
 
-BYOC accounts build reputation in their own AWS account and are monitored by AWS rather than by us.
+BYOC accounts build reputation in their own AWS account, which AWS reviews. On BYOC, your own
+[reputation protection](#reputation-protection) watches the same bounce and complaint rates and
+pauses your sending before AWS has to.
 
 ### Testing an integration without mailing anyone
 
@@ -956,11 +1014,13 @@ swallows them, which is useful if you are testing at the SES level.
 > **The three test addresses are available on Shared SES only.** Sending to `bounce@sendfleet.net`
 > from a BYOC domain returns `403 unauthorized` and is not queued. This is deliberate: the test
 > addresses work by SendFleet generating the delivery event itself, and on BYOC your own AWS account
-> performs the send with no event destination connected to SendFleet, so there is nothing to
-> generate. Allowing it would put a real message into your account addressed to a mailbox that does
-> not exist — a real non-delivery report against the sender reputation you own, and no webhook for
-> you to test. Simulator addresses do work on BYOC. To test a BYOC integration, send to
-> a real address you control.
+> performs the send, so there is no point at which SendFleet could stand in for it. Allowing it would
+> put a real message into your account addressed to a mailbox that does not exist — a real
+> non-delivery report against the sender reputation you own. Simulator addresses do work on BYOC:
+> with delivery tracking on, a simulated bounce or complaint reaches your email log and, on the BYOC
+> plan, your webhooks. AWS leaves simulator events out of its view of your account, but your
+> SendFleet reputation protection counts them like any other, so keep simulator tests to a handful.
+> To test deliverability end to end, send to a real address you control.
 
 <br>
 
@@ -972,12 +1032,13 @@ endpoints for domains, keys, webhooks, or DNS, all of which you manage in the da
 | Page | What it does |
 |---|---|
 | **Overview** | Sends used this month against your limit, active key count, current plan and state, and a delivery-outcomes breakdown (delivered / bounced / complained / rejected) for Managed plans. Also a live setup checklist telling you exactly what is still missing. |
-| **Email Logs** | 14-day history of every Shared SES message: time, recipient, sender, subject, and status. Open any message for a full status timeline, bounce and complaint detail, and the message body. |
+| **Email Logs** | 14-day history of every Shared SES message, and of every BYOC message while email logs are on: time, recipient, sender, subject, and status. Open any message for a full status timeline and bounce and complaint detail, plus the message body on Shared SES (BYOC bodies are never stored). |
 | **API Keys** | Create, name, scope to domains, set an expiry date, revoke, or delete. Tabs for all, active, and revoked-or-expired keys. |
 | **Domains** | Add BYOC or Shared SES domains, get the DNS records, download a zone file, verify all records, read live per-record status and your deliverability score. |
 | **Webhooks** | Add endpoints, choose events, copy your signing secret, pause, resume, or delete. Includes copy-paste signature verification snippets. |
 | **Billing** | Current plan and usage, upgrade, downgrade, cancel, resume, or open the billing portal. |
-| **Settings** | Profile, password, account deletion, and the full BYOC IAM role setup wizard with your trust policy and permissions pre-filled. |
+| **AWS** | BYOC: one-click connection, live SES account health, production access requests, delivery tracking, reputation protection, suppression list, usage and your monthly cap. |
+| **Settings** | Profile, password and account deletion. |
 
 Warnings appear where they are actionable — a DKIM failure on a verified domain, a missing domain
 altogether, an unverified account email, usage approaching your limit, or a suspended account — each
@@ -999,7 +1060,7 @@ with a link to the page that fixes it.
   **No refund or credit** is issued for unused days on the prior plan. The next charge is at the
   lower price.
 - **Cancel** — cancel at the end of the current period. You keep full access until then, and the
-  plan drops to **Free BYOC** (50 BYOC emails/month) at period end.
+  plan drops to **Free BYOC** (3,000 BYOC emails/month) at period end.
 - **Resume** — restart a paused subscription from the billing page.
 - **Billing portal** — manage your payment method, invoices, and cancellation directly.
 - **Free BYOC is free forever.** No card, no expiry, no time limit.
@@ -1033,8 +1094,9 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
   even if someone learns your Role ARN.
 - The IAM role name `SendFleet-BYOC-Role` is enforced, case-sensitively, and a role with any other
   name is rejected at setup, so only a conforming role can ever be assumed.
-- The role is granted only the SES permissions it needs. Revoke it from your AWS console at any time
-  and sending stops immediately.
+- The role is granted only what SendFleet uses: sending, your domains, account health, and its own
+  `sendfleet-*` tracking resources — no IAM, no other resources, no mail content. Only SendFleet's
+  sending and management services can use it. Delete the CloudFormation stack to revoke access.
 
 **Delivery pipeline**
 - Every send request is cryptographically signed before it enters the processing pipeline and
@@ -1046,8 +1108,9 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 - Endpoint URLs are checked for public routability, so internal and metadata addresses are rejected.
 
 **Account and content privacy**
-- BYOC: recipient addresses, subjects, and bodies are never written to our database. Only a monthly
-  send counter.
+- BYOC: message bodies are never written to our database. With email logs on, recipient addresses,
+  subjects (unless you turn them off) and delivery status are kept for 14 days; with metrics only,
+  hourly counts; with tracking off, only a monthly send counter.
 - Shared SES: content is written to your email log and purged after 14 days, except while an account
   is under review, where logs are preserved for as long as the review requires.
 - Attachments are held only for the duration of delivery and are then discarded, on every plan. They
@@ -1070,8 +1133,8 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 | Request body | 58 MB |
 | Sender domains per account | Unlimited |
 | API keys per account | Unlimited |
-| Email log retention (Shared SES) | 14 days |
-| Monthly send limit | 50 / 1,000,000 / 5,000 / 25,000 / 100,000 by plan |
+| Email log retention | 14 days (BYOC: only with email logs on) |
+| Monthly send limit | 3,000 / 20,000 included then up to 1,000,000 / 5,000 / 25,000 / 100,000 by plan |
 | DNS propagation | A few minutes, up to 48 hours |
 | Test-address sends | Count against the monthly send limit like any other send; never against the bounce or complaint rates |
 | Webhook delivery timeout | 5 seconds, no retries |
@@ -1081,11 +1144,11 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 
 ## Get started
 
-1. **Create a free account** at **[sendfleet.net/register](https://sendfleet.net/register)** — 50
+1. **Create a free account** at **[sendfleet.net/register](https://sendfleet.net/register)** — 3,000
    BYOC emails a month, no credit card required. Email verification is required before you can
    send.
-2. **Connect a sending mode.** BYOC: paste the IAM role ARN from your dashboard into Settings, then
-   add a domain. Shared SES: pick a Managed plan, then add a domain.
+2. **Connect a sending mode.** BYOC: in Dashboard → AWS, create the role with one click and paste its
+   ARN, then add a domain. Shared SES: pick a Managed plan, then add a domain.
 3. **Add your DNS records** and click **Verify all records**.
 4. **Create an API key** and copy it — the secret is shown once.
 5. **Send your first email.**
@@ -1125,6 +1188,6 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 
 <p align="center">
   <sub>
-    ⚡ <strong>SendFleet</strong> — Your SES or ours. One endpoint. No message content retained for BYOC.
+    ⚡ <strong>SendFleet</strong> — Your SES or ours. One endpoint. No message bodies retained for BYOC.
   </sub>
 </p>
