@@ -626,6 +626,27 @@ To send to anyone else through Shared SES, choose a Managed plan.
 
 <br>
 
+
+### Sending before you have a domain: test@sendfleet.net
+
+On the Free plan and every Managed plan, `test@sendfleet.net` is a sender you can use with no
+domain, no DNS and no AWS account, so your first `POST /v1/send` works the moment you have an API
+key. It goes through the same API, checks and delivery pipeline as any other send.
+
+- One recipient: your own verified account address, exactly, as for the smoke test above. Any
+  other `to`, any `cc` or `bcc`, a test address or the SES simulator is `403 unauthorized`.
+- The same `reply_to`, `from_name` and `subject` rules as the smoke test.
+- No webhooks, and the first spam complaint on one suspends the account.
+- Up to 50 sends per account in 24 hours; past that, `429 usage_limit_exceeded`. Sends also count
+  towards your plan's monthly allowance.
+- Any other address at `sendfleet.net` is `403 domain_not_registered`. No account can add
+  `sendfleet.net` as a domain.
+- Not on the paid BYOC plan, whose mail leaves your own AWS account.
+
+A successful send carries this `warnings` entry: "Sent from test@sendfleet.net: delivered only to
+your own verified address, no webhooks fired. Add your own domain to send to anyone:
+https://sendfleet.net/dashboard/domains/"
+
 ## Plans and pricing
 
 Five plans. Two sending modes. All prices USD, billed monthly in advance.
