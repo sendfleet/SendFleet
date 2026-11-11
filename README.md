@@ -3,18 +3,25 @@
     Send<span style="color:#f5a623;">Fleet</span>
   </h1>
   <p style="color:#8a8480; font-size:0.9em; margin-top:8px;">
-    Your SES or ours. One API. Zero friction.
+    Email on your own Amazon SES.
   </p>
 </div>
 
 <br>
 
-> **SendFleet is a transactional email API with two sending modes.**
-> Route mail through your own AWS SES account (BYOC) or through SendFleet's managed sending
-> infrastructure. Both modes use the same sending endpoint and request fields, with mode-specific
-> limits and response fields. On BYOC, connecting your AWS account is one click, SendFleet sets up
-> delivery tracking in it for you, and message bodies are never written to our database. No SDK
-> required.
+> **Email on your own Amazon SES.** Transactional API, campaigns and automations in one place.
+> Your AWS account, your reputation, your data. You pay AWS for sending and SendFleet a flat fee
+> for everything else, never per contact.
+>
+> On your own SES (BYOC) SendFleet gives you a transactional API plus contacts and lists, signup
+> forms with double opt-in, campaigns, one-click unsubscribe, open and click tracking, consent
+> records and automations, with one contact record shared by all of them. Connecting your AWS
+> account is one click, SendFleet sets up delivery tracking in it for you, and messages sent
+> through the API are never written to our database. No SDK required.
+>
+> **Managed** is vetted transactional sending through SendFleet's own SES, by approved
+> application, for teams whose AWS account is not ready yet. Moving a domain to BYOC later needs
+> no code change.
 
 <br>
 
@@ -53,7 +60,7 @@ your `from_email`. That mode is fixed when the domain is added and cannot be cha
 a BYOC domain sends through **your** AWS SES account, and a Shared SES domain uses managed sending.
 
 > **Before you switch plans, read this.** A domain's sending mode is permanent. If you move from a
-> BYOC plan to a Managed plan — or the other way — your existing domains keep their original mode
+> plan on your own SES to Managed — or the other way — your existing domains keep their original mode
 > and your sends start failing with `403 domain_mode_mismatch`. Add fresh domains for the new mode
 > and retire the old ones. Switching is fully self-serve and takes minutes, not a support ticket.
 
@@ -63,11 +70,12 @@ a BYOC domain sends through **your** AWS SES account, and a Shared SES domain us
 | **Recipients, subjects, bodies stored on our servers** | Bodies never. Recipients and subjects only while email logs are on (the default; 14 days) | Yes — 14 days, in your dashboard |
 | **Sender reputation** | Isolated to your AWS account | Shared pool across Managed accounts |
 | **AWS account required** | Yes (yours, out of sandbox) | No |
-| **Manual approval required** | No | No |
-| **Monthly send limit** | 3,000 (Free), or 20,000 included then pay as you go up to 1,000,000 ($5 + usage) | 5,000 / 25,000 / 100,000 |
+| **Manual approval required** | No | Yes — an application reviewed before purchase |
+| **Monthly send limit** | 3,000 (Free), 100,000 included (Pro) or 1,000,000 included (Scale), then $0.10 per 1,000 up to your cap | 25,000 transactional |
+| **Campaigns, forms, automations** | ✓ | — |
 | **Email log dashboard** | Optional — 14 days, metadata only | Full 14-day history |
 | **Delivery outcomes** | Tracked from your own SES events | Managed for you |
-| **Webhook delivery events** | ✓ (BYOC plan) | ✓ |
+| **Webhook delivery events** | ✓ (Pro and Scale) | ✓ |
 | **Bounce and complaint protection** | ✓ — levels you choose | Managed for you |
 | **Attachments** | ✓ | ✓ |
 
@@ -245,7 +253,7 @@ One request sends **one message** to everyone in `to`, `cc` and `bcc`. This exam
   email log (on BYOC, while email logs are on) and gets its own webhooks, all under the send's one
   `idempotency_key`, with the address in `recipient`.
 - **The Free plan's Shared smoke test allows no `cc` or `bcc`** — it reaches your own address only.
-  Free BYOC sending supports both.
+  Free sending supports both.
 - **A SendFleet test address must be a send's only recipient.**
 
 ### Successful response — `200 OK`
@@ -395,8 +403,8 @@ curl https://api.sendfleet.net/v1/me -H "X-API-Key: YOUR_API_KEY"
 | `name`, `email` | Account identity. |
 | `is_verified` | Sending is blocked until this is `true`. |
 | `current_plan` | The plan whose allowance applies **right now**: `starter` (free), `byoc`, `managed_starter`, `growth`, or `pro`. An inactive, cancelled or `past_due` subscription reports `starter`, because that is what you are metered against — read this field, not your billing history, when you want to know your limit. |
-| `byoc_usage_current_month` | BYOC sends this calendar month (UTC). **On Free BYOC this is the plan's one counter** and includes Shared smoke-test sends (see [Free plan: the Shared smoke test](#free-plan-the-shared-smoke-test)); it is the number checked against the 3,000. On BYOC it is the number checked against the monthly cap you set (default 100,000, up to 1,000,000). |
-| `shared_usage_current_month` | Shared sends this calendar month. On a Managed plan this is exactly the number checked against your plan limit. On Free BYOC it only breaks out how many of your sends were smoke tests. |
+| `byoc_usage_current_month` | BYOC sends this calendar month (UTC). **On Free this is the plan's one counter** and includes Shared smoke-test sends (see [Free plan: the Shared smoke test](#free-plan-the-shared-smoke-test)); it is the number checked against the 3,000. On BYOC it is the number checked against the monthly cap you set (never below your plan's included emails; up to 2,000,000 on Pro and 10,000,000 on Scale). |
+| `shared_usage_current_month` | Shared sends this calendar month. On a Managed plan this is exactly the number checked against your plan limit. On Free it only breaks out how many of your sends were smoke tests. |
 | `shared_delivered_current_month` | Feeds your delivery rate. |
 | `shared_bounced_current_month` | Feeds your bounce rate. |
 | `shared_complained_current_month` | Feeds your complaint rate. |
@@ -547,21 +555,30 @@ queued are retried briefly, then dropped rather than retried for days. Recreate 
 
 ### BYOC limits and billing
 
-- **Free BYOC** — 3,000 emails per month, with delivery tracking and email logs. No webhooks.
-- **BYOC ($5/month + usage)** — 20,000 emails and 20,000 logged emails included each calendar month
-  (UTC). Beyond that, **$0.10 per 1,000 emails sent** and **$0.10 per 1,000 emails logged** (only
-  with email logs on), rounded up to the next 1,000 and added to your next renewal invoice. Webhooks
-  included. Your own AWS SES charges are billed by AWS, separately.
-- **What counts** — only usage while you are on the BYOC plan. Sends on the Free plan earlier in the
-  month, sends after the plan ends and emails Amazon SES did not accept are never charged. A month is
-  charged once; if your subscription is set to end, that month's usage so far is charged just before
-  it ends.
-- **Your monthly cap** — set it in Dashboard → AWS (default 100,000, up to 1,000,000). Sends past it
-  return `429 usage_limit_exceeded`, so a bug in your code can never run up a bill. Your own AWS SES
-  quota also applies; whichever is lower is the limit you meet first. Need more than 1,000,000?
-  Email support@sendfleet.net.
+- **Free** — 3,000 emails and 1,000 contacts per month, with delivery tracking, email logs,
+  campaigns and signup forms. No webhooks. Campaigns carry a small "Sent with SendFleet" line.
+- **Pro ($29/month)** — 100,000 emails included each calendar month (UTC), unlimited contacts,
+  webhooks and automations. **Scale ($99/month)** — 1,000,000 included, priority support.
+  Beyond the allowance, **$0.10 per 1,000 emails**, rounded up to the next 1,000 and charged in the
+  two days before your next renewal. Transactional and marketing emails share the allowance, and
+  email logs are included and never charged. Your own AWS SES charges are billed by AWS,
+  separately.
+- **What counts** — only usage while you are on Pro or Scale. Sends on the Free plan earlier in the
+  month, sends after the plan ends and emails Amazon SES did not accept are never charged. Moving to
+  Managed does not cancel usage already counted: it is charged the same way, to the subscription
+  you then hold. If your subscription is set to end, that month's usage so far is charged just
+  before it ends, and if you keep the subscription after all, the rest of the month is charged
+  before a later renewal. If your subscription ends at once (you delete your account, or it is
+  suspended), usage so far is charged first. Usage that could not be charged before a subscription
+  ended, for example while a payment was overdue, is charged to your next subscription. No email is
+  charged twice.
+- **Your monthly cap** — set it in Dashboard → AWS (up to 2,000,000 on Pro and 10,000,000 on
+  Scale; it never cuts into the emails your plan includes). Sends past it return
+  `429 usage_limit_exceeded`, so a bug in your code can never run up a bill. Your own AWS SES quota
+  also applies; whichever is lower is the limit you meet first. Need more than 10,000,000? Email
+  support@sendfleet.net.
 
-The Free BYOC allowance also covers the [Shared smoke test](#free-plan-the-shared-smoke-test): one
+The Free plan's allowance also covers the [Shared smoke test](#free-plan-the-shared-smoke-test): one
 monthly counter, whichever path the send takes.
 
 Deleting your account does not reset it. Sign up again with the same address in the same calendar
@@ -572,7 +589,10 @@ new account continues from the sends the deleted one had used. The next month st
 
 ## Shared SES: Managed infrastructure
 
-No AWS account needed. Pick a Managed plan, verify your domain with DNS records, and start sending.
+Managed is vetted transactional sending with no AWS account needed. Apply from the dashboard; once
+a person approves the application, subscribe, verify your domain with DNS records, and start
+sending. Every link in a Managed message must point to your sending domain or a link domain
+approved in the application, and marketing email is not available on Managed.
 Dashboard logs, delivery webhooks, and automatic bounce, complaint, and suppression handling are
 included.
 
@@ -589,8 +609,13 @@ managed path is self-serve from the moment you subscribe.
 - **Managed deliverability monitoring** across rolling windows.
 
 **The trade-off:** because all Managed accounts share our sender reputation, we monitor sending
-quality and pause sending on accounts that cross the limits. Read
+quality and pause sending on accounts that cross the limits. Borderline addresses can be
+suppressed, and a message goes to one address in `to` and five recipients in total. Read
 [Bounces, complaints, and suspension](#bounces-complaints-and-suspension) before you scale up.
+
+We see Shared SES as a starting point. For production mail over the long run we recommend
+[BYOC](#byoc-bring-your-own-ses), where the reputation is yours alone; moving a domain across
+needs no code change.
 
 Email content for Shared SES sends is written to your email log and retained for **14 days**, then
 purged automatically. Attachments are staged only for the duration of delivery and are never
@@ -598,7 +623,7 @@ written to our database.
 
 ### Free plan: the Shared smoke test
 
-Free BYOC can also send through Shared SES — **to your own verified account address and nowhere
+Free can also send through Shared SES — **to your own verified account address and nowhere
 else**. It exists so you can check a request end to end through SendFleet's infrastructure before
 you set up AWS or pick a plan. **It is a smoke test, not a sending path.**
 
@@ -610,8 +635,8 @@ you set up AWS or pick a plan. **It is a smoke test, not a sending path.**
 - **No redirection:** `reply_to` may only be empty, your own address, or the sender address.
   `from_name` may not contain an address, line breaks, or the characters `< > @ , ; "`, and
   `subject` may not contain line breaks.
-- **One Shared domain**, verified the same way as on a Managed plan.
-- **Same allowance:** smoke tests count towards Free BYOC's 3,000 emails a month, together with your
+- **One Shared domain**, verified the same way as on Managed.
+- **Same allowance:** smoke tests count towards the Free plan's 3,000 emails a month, together with your
   BYOC sends.
 - **No webhooks.** Smoke-test sends appear in your email log (14 days, content included — this is
   Shared SES), but no webhook fires for them, even if your account has endpoints left over from a
@@ -622,7 +647,7 @@ you set up AWS or pick a plan. **It is a smoke test, not a sending path.**
   suspends the account** — no warning and no temporary pause first. Delete a smoke test you no
   longer want; do not report it.
 
-To send to anyone else through Shared SES, choose a Managed plan.
+To send to anyone else through Shared SES, apply for Managed.
 
 <br>
 
@@ -649,57 +674,53 @@ https://sendfleet.net/dashboard/domains/"
 
 ## Plans and pricing
 
-Five plans. Two sending modes. All prices USD, billed monthly in advance.
+Four plans, priced as a flat monthly fee and never per contact. All prices USD, billed monthly in
+advance. Transactional and marketing emails share one monthly allowance; email logs are included.
 
-| Plan | Sends through | Monthly limit | Price |
-|---|---|---|---|
-| **Free BYOC** | Your AWS SES (BYOC) — plus a Shared smoke test to your own address | 3,000 (both together) | **Free** |
-| **BYOC** | Your AWS SES (BYOC) | 20,000 included, then pay as you go up to 1,000,000* | **$5/mo + usage** |
-| **Managed Starter** | SendFleet Shared SES | 5,000 | **$5/mo** |
-| **Managed Growth** | SendFleet Shared SES | 25,000 | **$15/mo** |
-| **Managed Pro** | SendFleet Shared SES | 100,000 | **$59/mo** |
+| Plan | Sends through | Monthly emails | Contacts | Price |
+|---|---|---|---|---|
+| **Free** | Your AWS SES (BYOC) — plus a Shared smoke test to your own address | 3,000 (both together) | 1,000 | **Free** |
+| **Pro** | Your AWS SES (BYOC) | 100,000 included* | Unlimited | **$29/mo** |
+| **Scale** | Your AWS SES (BYOC) | 1,000,000 included* | Unlimited | **$99/mo** |
+| **Managed** | SendFleet Shared SES, by approved application | 25,000 transactional | — | **$29/mo** |
 
-\* *$0.10 per 1,000 emails beyond 20,000, and $0.10 per 1,000 logged emails beyond 20,000. Your own monthly cap and your AWS SES sending quota also apply; whichever is lower is the limit you meet first.*
+\* *Then $0.10 per 1,000 emails, up to a monthly cap you set (Pro up to 2,000,000, Scale up to 10,000,000). Your AWS SES sending quota also applies; whichever is lower is the limit you meet first. AWS bills SES to your own AWS account.*
 
 ### Compare every plan
 
-| | Free BYOC | BYOC | Managed Starter | Managed Growth | Managed Pro |
-|---|---|---|---|---|---|
-| **Price** | $0/mo | $5/mo + usage | $5/mo | $15/mo | $59/mo |
-| **Sending infrastructure** | Your AWS SES | Your AWS SES | SendFleet SES | SendFleet SES | SendFleet SES |
-| **Recipients, subjects, bodies stored by us** | Bodies never; recipients and subjects only with email logs on (smoke tests are logged 14 days) | Bodies never; recipients and subjects only with email logs on | Stored in logs | Stored in logs | Stored in logs |
-| **Reputation isolated per-customer** | ✓ | ✓ | — | — | — |
-| **Manual account approval** | Not required | Not required | Not required | Not required | Not required |
-| **Monthly email volume** | 3,000 | 20,000 included, up to 1,000,000* | 5,000 | 25,000 | 100,000 |
-| **REST API access** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Unlimited API keys** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Email log history** | Optional, 14 days, metadata only | Optional, 14 days, metadata only | 14 days | 14 days | 14 days |
-| **Domain verification** | Via your SES | Via your SES | Via our SES | Via our SES | Via our SES |
-| **Attachments** | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Bounce & complaint handling** | Tracking and protection in your AWS account | Tracking and protection in your AWS account | ✓ | ✓ | ✓ |
-| **Shared SES sending** | Smoke test only: your own address | — | ✓ | ✓ | ✓ |
-| **Webhook delivery events** | — | ✓ | ✓ | ✓ | ✓ |
-| **Support channel** | Email | Email | Priority email | Priority email | Priority email |
+| | Free | Pro | Scale | Managed |
+|---|---|---|---|---|
+| **Price** | $0/mo | $29/mo | $99/mo | $29/mo |
+| **Sending infrastructure** | Your AWS SES | Your AWS SES | Your AWS SES | SendFleet SES |
+| **API messages stored by us** | Never; recipients and subjects only with email logs on (smoke tests are logged 14 days) | Never; recipients and subjects only with email logs on | Never; recipients and subjects only with email logs on | Stored in logs, 14 days |
+| **Reputation isolated per customer** | ✓ | ✓ | ✓ | — |
+| **Application reviewed before purchase** | — | — | — | ✓ |
+| **Monthly email volume** | 3,000 | 100,000 included* | 1,000,000 included* | 25,000 transactional |
+| **Contacts** | 1,000 | Unlimited | Unlimited | — |
+| **Campaigns, signup forms, consent records** | ✓ | ✓ | ✓ | — |
+| **Automations** | — | ✓ | ✓ | — |
+| **"Sent with SendFleet" line in campaign footers** | Yes | No | No | — |
+| **REST API and unlimited API keys** | ✓ | ✓ | ✓ | ✓ |
+| **Email log history** | Optional, 14 days, metadata only | Optional, 14 days, metadata only | Optional, 14 days, metadata only | 14 days |
+| **Bounce & complaint handling** | Tracking and protection in your AWS account | Tracking and protection in your AWS account | Tracking and protection in your AWS account | ✓ |
+| **Shared SES sending** | Smoke test only: your own address | — | — | ✓ |
+| **Webhook delivery events** | — | ✓ | ✓ | ✓ |
+| **Support channel** | Email | Email | Priority | Email |
 
 ### What each plan is for
 
-- **Free BYOC** — Validate your integration end-to-end before committing to anything. 3,000 emails a
-  month, no credit card, no time limit. Includes a Shared smoke test to your own address, so you can
-  try a request before setting up AWS; it cannot send to anyone else. Upgrade to the $5 BYOC plan
-  with no other changes to your code.
-- **BYOC ($5 + usage)** — Your own SES and sender reputation, with SendFleet doing the AWS work:
-  delivery tracking, webhooks, email logs and bounce protection. 20,000 emails included each month,
-  then $0.10 per 1,000, with a cap you set. Requires a connected AWS account first.
-- **Managed Starter ($5)** — You want logs, webhooks, and handled bounces without touching AWS at
-  all. 5,000 emails a month.
-- **Managed Growth ($15)** — The working default for a production app. 25,000 emails a month with
-  full observability.
-- **Managed Pro ($59)** — 100,000 emails a month, same feature set, priority email support.
+- **Free** — Validate your integration and your first campaigns before committing to anything.
+  3,000 emails and 1,000 contacts a month, no credit card, no time limit.
+- **Pro ($29)** — Your own SES and sender reputation, with SendFleet doing the AWS work, for the
+  transactional mail and newsletters of a growing product. 100,000 emails included each month,
+  unlimited contacts, webhooks and automations.
+- **Scale ($99)** — The same, for a million emails a month and more, with priority support.
+- **Managed ($29)** — Vetted transactional sending without touching AWS, by approved application:
+  25,000 emails a month with logs, webhooks and handled bounces. No marketing email.
 
 ### Need something custom?
 
-Enterprise plans with dedicated infrastructure, custom rate limits, uptime commitments, SSO, audit
-logs, and a dedicated account manager are available — talk to
+For volume above Scale, or anything else the plans do not cover, talk to
 **[sales@sendfleet.net](mailto:sales@sendfleet.net)**.
 
 <br>
@@ -895,6 +916,7 @@ human-readable and explicitly non-contractual.
 | 403 | `domain_not_verified` | SES ownership or DKIM not yet confirmed | Add the DNS records and verify. |
 | 403 | `dkim_not_verified` | All three DKIM CNAMEs not confirmed (Shared SES) | Publish the records, then verify DKIM. |
 | 403 | `domain_mode_mismatch` | The domain's sending mode does not match your plan | Add a domain for the mode your plan uses, or switch plans. |
+| 403 | `content_rejected` | A Managed (Shared SES) message links to a domain that is not your sending domain, one of its subdomains, or a link domain approved with your Managed application, or it matches a high-risk phishing pattern | Nothing was sent. Do not retry unchanged: link only to your own domains, or ask for a link domain to be added to your application. |
 | 403 | `sending_suspended` | Sending stopped on your account: a 24-hour pause that lifts by itself, a suspension, or — on BYOC — your own reputation protection | Check the `detail`: a temporary pause resumes on its own; a protection pause resumes when you press Resume in Dashboard → AWS; a suspension needs a support review. |
 | 422 | `recipient_suppressed` | *Reserved for contract stability — no longer returned* | Keep any existing handler, but do not expect it to fire. |
 | 429 | `usage_limit_exceeded` | Monthly plan quota or your own BYOC monthly cap exhausted, or fewer sends left than the request has recipients | Do not retry. Upgrade (BYOC is the largest plan; above it, email support@sendfleet.net), send to fewer recipients, or wait for the quota to reset on the first of the next UTC calendar month. |
@@ -963,7 +985,7 @@ phishing, that is the rule to design around.
 **A second exception, on the free plan only:** a spam complaint on a
 [Shared smoke test](#free-plan-the-shared-smoke-test) — mail that can only have gone to your own
 address — **permanently suspends the account on the first report**, skipping the warning and the
-pause below. Free BYOC sending and every paid plan follow the steps below unchanged.
+pause below. Free sending and every paid plan follow the steps below unchanged.
 
 ### What happens when you cross a limit
 
@@ -1081,10 +1103,10 @@ with a link to the page that fixes it.
   **No refund or credit** is issued for unused days on the prior plan. The next charge is at the
   lower price.
 - **Cancel** — cancel at the end of the current period. You keep full access until then, and the
-  plan drops to **Free BYOC** (3,000 BYOC emails/month) at period end.
+  plan drops to **Free** (3,000 BYOC emails/month) at period end.
 - **Resume** — restart a paused subscription from the billing page.
 - **Billing portal** — manage your payment method, invoices, and cancellation directly.
-- **Free BYOC is free forever.** No card, no expiry, no time limit.
+- **Free is free forever.** No card, no expiry, no time limit.
 - Quotas reset at the start of each **UTC calendar month**. There is no annual billing.
 
 Usage is counted exactly, one slot per recipient (`to`, `cc` and `bcc` alike, as Amazon SES
@@ -1155,7 +1177,7 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 | Sender domains per account | Unlimited |
 | API keys per account | Unlimited |
 | Email log retention | 14 days (BYOC: only with email logs on) |
-| Monthly send limit | 3,000 / 20,000 included then up to 1,000,000 / 5,000 / 25,000 / 100,000 by plan |
+| Monthly send limit | 3,000 (Free) / 100,000 included (Pro) / 1,000,000 included (Scale) / 25,000 (Managed) |
 | DNS propagation | A few minutes, up to 48 hours |
 | Test-address sends | Count against the monthly send limit like any other send; never against the bounce or complaint rates |
 | Webhook delivery timeout | 5 seconds, no retries |
@@ -1168,8 +1190,9 @@ be raised within 14 days of the charge — 30 days for billing errors; see the
 1. **Create a free account** at **[sendfleet.net/register](https://sendfleet.net/register)** — 3,000
    BYOC emails a month, no credit card required. Email verification is required before you can
    send.
-2. **Connect a sending mode.** BYOC: in Dashboard → AWS, create the role with one click and paste its
-   ARN, then add a domain. Shared SES: pick a Managed plan, then add a domain.
+2. **Connect a sending mode.** BYOC (recommended): in Dashboard → AWS, create the role with one
+   click and paste its ARN, then add a domain. Not on AWS yet? Pick a Managed plan, then add a
+   domain.
 3. **Add your DNS records** and click **Verify all records**.
 4. **Create an API key** and copy it — the secret is shown once.
 5. **Send your first email.**
